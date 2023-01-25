@@ -13,3 +13,9 @@ After loading the model you can use the extension.
 ![image](https://user-images.githubusercontent.com/26013475/214626112-688df8fa-6e55-4d39-a16b-3ed66ec450c1.png)
 
 Model does not work with img2img or txt2img. Merging is possible but requires modification to extras.py (out of scope for now)
+
+Feel free to use my modified Image Browser extension for native browsing support (and enhanced sort and filter features compared to normal repo):
+
+https://github.com/Klace/stable-diffusion-webui-images-browser
+
+![image](https://user-images.githubusercontent.com/26013475/214626966-50897959-7c7e-4a49-b92c-6609d7af1735.png)
