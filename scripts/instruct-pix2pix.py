@@ -38,10 +38,10 @@ from modules.generation_parameters_copypaste import quote
 from modules.sd_samplers import samplers, samplers_for_img2img
 import modules.generation_parameters_copypaste as parameters_copypaste
 sys.path.append("../../")
-outdir = opts.outdir_ip2p_samples
-if opts.outdir_samples != "":
-    outdir = opts.outdir_samples
-os.makedirs(outdir, exist_ok=True)
+outdir = opts.outdir_samples
+if opts.outdir_samples == "":
+    shared.opts.add_option("outdir_ip2p_samples", shared.OptionInfo("outputs/ip2p-images", "Save path for images", section=('ip2p', "Instruct-pix2pix")))
+    outdir = opts.outdir_ip2p_samples
 
 ## Uses example code from https://github.com/timothybrooks/instruct-pix2pix
 ## See accompanying license file for more info
@@ -271,8 +271,11 @@ def create_tab(tabname):
                     )
 
 tabs_list = ["ip2p"]
+    
+    
 def on_ui_tabs():
-
+    
+        
     with gr.Blocks(analytics_enabled=False) as i2p2p:
         with gr.Tabs(elem_id="ip2p_tab)") as tabs:
             for tab in tabs_list:
@@ -283,8 +286,9 @@ def on_ui_tabs():
 
 def on_ui_settings():
     section = ('ip2p', "Instruct-pix2pix")
-    shared.opts.add_option("outdir_ip2p_samples", shared.OptionInfo("outputs/ip2p-images", "Save path for images", section=section))
     
+
+
 
 script_callbacks.on_ui_settings(on_ui_settings)
 script_callbacks.on_ui_tabs(on_ui_tabs)
