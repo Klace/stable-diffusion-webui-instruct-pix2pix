@@ -25,7 +25,7 @@ from modules.ui_common import create_output_panel
 import json
 import re
 import modules.images as images
-from modules.shared import opts, cmd_opts
+from modules.shared import opts, cmd_opts, OptionInfo
 from modules import shared, scripts
 from modules import script_callbacks
 from pathlib import Path
@@ -34,6 +34,7 @@ from PIL.ExifTags import TAGS
 from PIL.PngImagePlugin import PngImageFile, PngInfo
 from datetime import datetime
 from modules.generation_parameters_copypaste import quote
+
 from modules.sd_samplers import samplers, samplers_for_img2img
 import modules.generation_parameters_copypaste as parameters_copypaste
 sys.path.append("../../")
@@ -134,7 +135,7 @@ def generate(
             }
             generation_params_text = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in generation_params.items() if v is not None])
         
-            images.save_image(Image.fromarray(x.type(torch.uint8).cpu().numpy()), "outputs/ip2p-images", "ip2p", seed, instruction, "png", info=generation_params_text)
+            images.save_image(Image.fromarray(x.type(torch.uint8).cpu().numpy()), opts.outdir_ip2p_samples, "ip2p", seed, instruction, "png", info=generation_params_text)
         
             images_array.append(edited_image)
             batch_number -= 1
@@ -196,7 +197,7 @@ def create_tab(tabname):
       
                 with gr.Row():
                     input_image = gr.Image(label="Image for ip2p", elem_id="ip2p_image", show_label=False, source="upload", interactive=True, type="pil", tool="editor").style(height=480)
-                    ip2p_gallery, html_info_x, html_info, html_log = create_output_panel("ip2p", "outputs/ip2p-images")
+                    ip2p_gallery, html_info_x, html_info, html_log = create_output_panel("ip2p", opts.outdir_ip2p_samples)
                     
                 #with gr.Column():
                         #ip2p_button = gr.Button("Back to input")
@@ -277,6 +278,8 @@ def on_ui_tabs():
 
 def on_ui_settings():
     section = ('ip2p', "Instruct-pix2pix")
+    shared.opts.add_option("outdir_ip2p_samples", shared.OptionInfo("outputs/ip2p-images", "Save path for images", section=section))
+
 
 script_callbacks.on_ui_settings(on_ui_settings)
 script_callbacks.on_ui_tabs(on_ui_tabs)
