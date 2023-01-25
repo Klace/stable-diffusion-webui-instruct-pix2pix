@@ -14,9 +14,9 @@ After loading the model you can use the extension.
 
 Model does not work with img2img or txt2img. Merging is possible but requires modification to extras.py (out of scope for now)
 
-Embeddings for 1.5 does work, as does emphasis.
+Embeddings for 1.5 work, as does emphasis.
 
-ToDo: Button to send output back to input, negative prompting, batching, scripts, etc...
+ToDo: Button to send output back to input, scripts, proper batching, etc...
 
 Feel free to use my modified Image Browser extension for native browsing support (and enhanced sort and filter features compared to normal repo):
 
