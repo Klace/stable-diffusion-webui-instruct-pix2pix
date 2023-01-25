@@ -90,7 +90,7 @@ def generate(
         return [input_image, seed]
 
     images_array = []
-
+    orig_seed = seed
     with torch.no_grad(), autocast("cuda"), model.ema_scope():
         cond = {}
         cond["c_crossattn"] = [model.get_learned_conditioning([instruction])]
@@ -123,7 +123,7 @@ def generate(
             generation_params = {
                 "ip2p": "Yes",
                 "Prompt:": instruction,
-                "Ngative Prompt:": negative_prompt,
+                "Negative Prompt:": negative_prompt,
                 "Steps": steps,
                 "Sampler": "Euler A",
                 "Image CFG scale": image_cfg_scale,
@@ -139,8 +139,9 @@ def generate(
         
             images_array.append(edited_image)
             batch_number -= 1
+       
             seed += 1
-        return [seed, text_cfg_scale, image_cfg_scale, images_array]
+        return [orig_seed, text_cfg_scale, image_cfg_scale, images_array]
 
 def reset():
     return [0, "Randomize Seed", 1371, "Fix CFG", 7.5, 1.5, None]
