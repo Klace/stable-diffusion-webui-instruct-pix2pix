@@ -34,6 +34,7 @@ from PIL.ExifTags import TAGS
 from PIL.PngImagePlugin import PngImageFile, PngInfo
 from datetime import datetime
 from modules.generation_parameters_copypaste import quote
+from modules.sd_samplers import samplers, samplers_for_img2img
 import modules.generation_parameters_copypaste as parameters_copypaste
 sys.path.append("../../")
 
@@ -64,22 +65,15 @@ def generate(
     randomize_cfg: bool,
     text_cfg_scale: float,
     image_cfg_scale: float,
+    negative_prompt: str,
+    batch_number: int,
     ):
-    #parser = ArgumentParser()
-    #parser.add_argument("--resolution", default=512, type=int)
-    #parser.add_argument("--config", default="configs/generate.yaml", type=str)
-    #parser.add_argument("--ckpt", default="checkpoints/instruct-pix2pix-00-22000.ckpt", type=str)
-    #parser.add_argument("--vae-ckpt", default=None, type=str)
-    #args = parser.parse_args()
 
-  
-    #config = OmegaConf.load(args.config)
     model = shared.sd_model
     model.eval().cuda()
     model_wrap = K.external.CompVisDenoiser(model)
     model_wrap_cfg = CFGDenoiser(model_wrap)
     null_token = model.get_learned_conditioning([""])
-    #example_image = Image.open("imgs/example.jpg").convert("RGB")
     seed = random.randint(0, 100000) if randomize_seed else seed
     text_cfg_scale = round(random.uniform(6.0, 9.0), ndigits=2) if randomize_cfg else text_cfg_scale
     image_cfg_scale = round(random.uniform(1.2, 1.8), ndigits=2) if randomize_cfg else image_cfg_scale
@@ -91,8 +85,10 @@ def generate(
     height = int((height * factor) // 64) * 64
     input_image = ImageOps.fit(input_image, (width, height), method=Image.Resampling.LANCZOS)
 
-    if instruction == "":
+    if instruction == "" and negative_prompt == "":
         return [input_image, seed]
+
+    images_array = []
 
     with torch.no_grad(), autocast("cuda"), model.ema_scope():
         cond = {}
@@ -102,7 +98,7 @@ def generate(
         cond["c_concat"] = [model.encode_first_stage(input_image).mode()]
 
         uncond = {}
-        uncond["c_crossattn"] = [null_token]
+        uncond["c_crossattn"] = [model.get_learned_conditioning([negative_prompt])]
         uncond["c_concat"] = [torch.zeros_like(cond["c_concat"][0])]
 
         sigmas = model_wrap.get_sigmas(steps)
@@ -113,31 +109,36 @@ def generate(
             "text_cfg_scale": text_cfg_scale,
             "image_cfg_scale": image_cfg_scale,
         }
-        torch.manual_seed(seed)
-        z = torch.randn_like(cond["c_concat"][0]) * sigmas[0]
-        z = K.sampling.sample_euler_ancestral(model_wrap_cfg, z, sigmas, extra_args=extra_args)
-        x = model.decode_first_stage(z)
-        x = torch.clamp((x + 1.0) / 2.0, min=0.0, max=1.0)
-        x = 255.0 * rearrange(x, "1 c h w -> h w c")
-        edited_image = Image.fromarray(x.type(torch.uint8).cpu().numpy())
 
-        generation_params = {
-            "ip2p": "Yes",
-            "Prompt:": instruction,
-            "Steps": steps,
-            "Sampler": "Euler A",
-            "Image CFG scale": image_cfg_scale,
-            "Text CFG scale": image_cfg_scale,
-            "Seed": seed,
-            "Model hash": (None if not opts.add_model_hash_to_info or not shared.sd_model.sd_model_hash else shared.sd_model.sd_model_hash),
-            "Model": (None if not opts.add_model_name_to_info or not shared.sd_model.sd_checkpoint_info.model_name else shared.sd_model.sd_checkpoint_info.model_name.replace(',', '').replace(':', '')),
- 
-        }
-        generation_params_text = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in generation_params.items() if v is not None])
+        while batch_number > 0:
+            torch.manual_seed(seed)
+            z = torch.randn_like(cond["c_concat"][0]) * sigmas[0]
+            z = K.sampling.sample_euler_ancestral(model_wrap_cfg, z, sigmas, extra_args=extra_args)
+            x = model.decode_first_stage(z)
+            x = torch.clamp((x + 1.0) / 2.0, min=0.0, max=1.0)
+            x = 255.0 * rearrange(x, "1 c h w -> h w c")
+            edited_image = Image.fromarray(x.type(torch.uint8).cpu().numpy())
+
+            generation_params = {
+                "ip2p": "Yes",
+                "Prompt:": instruction,
+                "Ngative Prompt:": negative_prompt,
+                "Steps": steps,
+                "Sampler": "Euler A",
+                "Image CFG scale": image_cfg_scale,
+                "Text CFG scale": image_cfg_scale,
+                "Seed": seed,
+                "Model hash": (None if not opts.add_model_hash_to_info or not shared.sd_model.sd_model_hash else shared.sd_model.sd_model_hash),
+                "Model": (None if not opts.add_model_name_to_info or not shared.sd_model.sd_checkpoint_info.model_name else shared.sd_model.sd_checkpoint_info.model_name.replace(',', '').replace(':', '')),
+     
+            }
+            generation_params_text = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in generation_params.items() if v is not None])
         
-        images.save_image(Image.fromarray(x.type(torch.uint8).cpu().numpy()), "outputs/ip2p-images", "ip2p", seed, instruction, "png", info=generation_params_text)
-        images_array = []
-        images_array.append(edited_image)
+            images.save_image(Image.fromarray(x.type(torch.uint8).cpu().numpy()), "outputs/ip2p-images", "ip2p", seed, instruction, "png", info=generation_params_text)
+        
+            images_array.append(edited_image)
+            batch_number -= 1
+            seed += 1
         return [seed, text_cfg_scale, image_cfg_scale, images_array]
 
 def reset():
@@ -188,19 +189,22 @@ def create_tab(tabname):
             with gr.Column():
                 with gr.Row():
                     with gr.Column(elem_id=f"ip2p_prompt_container", scale=6):
-                        prompt = gr.Textbox(label="Prompt", elem_id=f"ip2p_prompt", show_label=False, lines=2, placeholder="Prompt (press Ctrl+Enter or Alt+Enter to generate)")
- 
+                        prompt = gr.Textbox(label="Prompt", elem_id=f"ip2p_prompt", show_label=False, lines=2, placeholder="Prompt")
+                        negative_prompt = gr.Textbox(label="Negative Prompt", elem_id=f"ip2p_negative_prompt", show_label=False, lines=2, placeholder="Negative Prompt")
                     with gr.Row(elem_id=f"ip2p_generate_box"):
                         generate_button = gr.Button("Generate")
       
                 with gr.Row():
                     input_image = gr.Image(label="Image for ip2p", elem_id="ip2p_image", show_label=False, source="upload", interactive=True, type="pil", tool="editor").style(height=480)
                     ip2p_gallery, html_info_x, html_info, html_log = create_output_panel("ip2p", "outputs/ip2p-images")
+                    
                 #with gr.Column():
                         #ip2p_button = gr.Button("Back to input")
 
                 with gr.Row():
-                    steps = gr.Number(value=100, precision=0, label="Steps", interactive=True)
+                    steps = gr.Number(value=10, precision=0, label="Steps", interactive=True)
+                    batch_number = gr.Number(value=1, label="Number Batches", precision=0, interactive=True)
+                with gr.Row():
                     randomize_seed = gr.Radio(
                         ["Fix Seed", "Randomize Seed"],
                         value="Randomize Seed",
@@ -216,27 +220,50 @@ def create_tab(tabname):
                         show_label=False,
                         interactive=True,
                     )
-                    text_cfg_scale = gr.Number(value=7.5, label=f"Text CFG", interactive=True)
-                    image_cfg_scale = gr.Number(value=1.5, label=f"Image CFG", interactive=True)
+                with gr.Row(max_width=50):
+                    text_cfg_scale = gr.Number(value=7.5, label=f"Text CFG", interactive=True, max_width=10)
+                    image_cfg_scale = gr.Number(value=1.5, label=f"Image CFG", interactive=True, max_width=10)
+                    
+                    gen_inputs=[
+                        input_image,
+                        prompt,
+                        steps,
+                        randomize_seed,
+                        seed,
+                        randomize_cfg,
+                        text_cfg_scale,
+                        image_cfg_scale,
+                        negative_prompt,
+                        batch_number
+                    ]
+
+                    gen_outputs=[
+                        seed,
+                        text_cfg_scale,
+                        image_cfg_scale,
+                        ip2p_gallery
+                    ]
 
                     generate_button.click(
                         fn=generate,
-                        inputs=[
-                            input_image,
-                            prompt,
-                            steps,
-                            randomize_seed,
-                            seed,
-                            randomize_cfg,
-                            text_cfg_scale,
-                            image_cfg_scale,
-                        ],
-                        outputs=[seed, text_cfg_scale, image_cfg_scale, ip2p_gallery],
+                        inputs=gen_inputs,
+                        outputs=gen_outputs,
                         show_progress=True,
                     )
 
-                    #ip2p_button.click(fn=lambda *x: x, show_progress=False,inputs=[ip2p_gallery], outputs=[input_image])
+                    prompt.submit(
+                        fn=generate,
+                        inputs=gen_inputs,
+                        outputs=gen_outputs,
+                        show_progress=True,
+                    )
 
+                    negative_prompt.submit(
+                        fn=generate,
+                        inputs=gen_inputs,
+                        outputs=gen_outputs,
+                        show_progress=True,
+                    )
 
 tabs_list = ["ip2p"]
 def on_ui_tabs():
