@@ -10,9 +10,11 @@ Download the instruct-pix2pix-00-22000 model manually from here: https://hugging
 
 After loading the model you can use the extension.
 
-![image](https://user-images.githubusercontent.com/26013475/214626112-688df8fa-6e55-4d39-a16b-3ed66ec450c1.png)
+![image](https://user-images.githubusercontent.com/26013475/214627261-1c344150-5e51-4ab6-bfad-50fb20fe5155.png)
 
 Model does not work with img2img or txt2img. Merging is possible but requires modification to extras.py (out of scope for now)
+
+ToDo: Button to send output back to input, negative prompting, try different samplers
 
 Feel free to use my modified Image Browser extension for native browsing support (and enhanced sort and filter features compared to normal repo):
 
