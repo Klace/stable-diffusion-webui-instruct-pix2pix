@@ -38,6 +38,10 @@ from modules.generation_parameters_copypaste import quote
 from modules.sd_samplers import samplers, samplers_for_img2img
 import modules.generation_parameters_copypaste as parameters_copypaste
 sys.path.append("../../")
+outdir = opts.outdir_ip2p_samples
+if opts.outdir_samples != "":
+    outdir = opts.outdir_samples
+os.makedirs(outdir, exist_ok=True)
 
 ## Uses example code from https://github.com/timothybrooks/instruct-pix2pix
 ## See accompanying license file for more info
@@ -135,7 +139,7 @@ def generate(
             }
             generation_params_text = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in generation_params.items() if v is not None])
         
-            images.save_image(Image.fromarray(x.type(torch.uint8).cpu().numpy()), opts.outdir_ip2p_samples, "ip2p", seed, instruction, "png", info=generation_params_text)
+            images.save_image(Image.fromarray(x.type(torch.uint8).cpu().numpy()), outdir, "ip2p", seed, instruction, "png", info=generation_params_text)
         
             images_array.append(edited_image)
             batch_number -= 1
@@ -184,10 +188,9 @@ example_instructions = [
 
 
 def create_tab(tabname):
- 
-        with gr.Row(visible=True, elem_id="ip2p_tab") as main_panel:
-    
+        
             
+        with gr.Row(visible=True, elem_id="ip2p_tab") as main_panel:
             with gr.Column():
                 with gr.Row():
                     with gr.Column(elem_id=f"ip2p_prompt_container", scale=6):
@@ -198,7 +201,7 @@ def create_tab(tabname):
       
                 with gr.Row():
                     input_image = gr.Image(label="Image for ip2p", elem_id="ip2p_image", show_label=False, source="upload", interactive=True, type="pil", tool="editor").style(height=480)
-                    ip2p_gallery, html_info_x, html_info, html_log = create_output_panel("ip2p", opts.outdir_ip2p_samples)
+                    ip2p_gallery, html_info_x, html_info, html_log = create_output_panel("ip2p", outdir)
                     
                 #with gr.Column():
                         #ip2p_button = gr.Button("Back to input")
@@ -269,6 +272,7 @@ def create_tab(tabname):
 
 tabs_list = ["ip2p"]
 def on_ui_tabs():
+
     with gr.Blocks(analytics_enabled=False) as i2p2p:
         with gr.Tabs(elem_id="ip2p_tab)") as tabs:
             for tab in tabs_list:
@@ -280,7 +284,7 @@ def on_ui_tabs():
 def on_ui_settings():
     section = ('ip2p', "Instruct-pix2pix")
     shared.opts.add_option("outdir_ip2p_samples", shared.OptionInfo("outputs/ip2p-images", "Save path for images", section=section))
-
+    
 
 script_callbacks.on_ui_settings(on_ui_settings)
 script_callbacks.on_ui_tabs(on_ui_tabs)
