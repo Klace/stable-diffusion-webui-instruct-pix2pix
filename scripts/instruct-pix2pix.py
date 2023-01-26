@@ -239,7 +239,7 @@ def create_tab(tabname):
                         prompt = gr.Textbox(label="Prompt", elem_id=f"ip2p_prompt", show_label=False, lines=2, placeholder="Prompt")
                         negative_prompt = gr.Textbox(label="Negative Prompt", elem_id=f"ip2p_negative_prompt", show_label=False, lines=2, placeholder="Negative Prompt")
                     with gr.Row(elem_id=f"ip2p_generate_box"):
-                        generate_button = gr.Button("Generate")
+                        generate_button = gr.Button(value="Generate", show_progress=True)
       
                 with gr.Row():
                     input_image = gr.Image(label="Image for ip2p", elem_id="ip2p_image", show_label=False, source="upload", interactive=True, type="pil", tool="editor").style(height=480)
@@ -254,7 +254,8 @@ def create_tab(tabname):
                     batch_number = gr.Number(value=1, label="Number Batches", precision=0, interactive=True)
                     
                 with gr.Row():
-                    scale = gr.Slider(minimum=64, maximum=4096, step=64, label="Output Resolution", value=512, elem_id="ip2p_scale")
+                    seed = gr.Number(value=1371, precision=0, label="Seed", interactive=True, show_progress=False)  
+                    
                     #resolution = gr.Number(value=1, label="Output Resolution", precision=0, interactive=True)
                     randomize_seed = gr.Radio(
                         ["Fix Seed", "Randomize Seed"],
@@ -263,8 +264,8 @@ def create_tab(tabname):
                         show_label=False,
                         interactive=True,
                     )
-                    text_cfg_scale = gr.Number(value=7.5, precision=None, label=f"Text CFG", interactive=True, max_width=10, step=0.01)
-                    image_cfg_scale = gr.Number(value=1.5, precision=None, label=f"Image CFG", interactive=True, max_width=10, step=0.01)
+                    text_cfg_scale = gr.Number(value=7.5, precision=None, label=f"Text CFG", interactive=True, max_width=10, step=0.01, show_progress=False)
+                    image_cfg_scale = gr.Number(value=1.5, precision=None, label=f"Image CFG", interactive=True, max_width=10, step=0.01, show_progress=False)
                     randomize_cfg = gr.Radio(  
                         ["Fix CFG", "Randomize CFG"],
                         value="Fix CFG",
@@ -273,7 +274,7 @@ def create_tab(tabname):
                         interactive=True,
                     )
                 with gr.Row(max_width=50):
-                    seed = gr.Number(value=1371, precision=0, label="Seed", interactive=True)                  
+                    scale = gr.Slider(minimum=64, maximum=4096, step=64, label="Output Image Width", value=512, elem_id="ip2p_scale")                 
                     gen_inputs=[
                         input_image,
                         prompt,
