@@ -72,7 +72,7 @@ def generate(
     image_cfg_scale: float,
     negative_prompt: str,
     batch_number: int,
-    resolution: int,
+    scale: int,
     ):
 
     model = shared.sd_model
@@ -85,7 +85,7 @@ def generate(
     image_cfg_scale = round(random.uniform(1.2, 1.8), ndigits=2) if randomize_cfg else image_cfg_scale
     
     width, height = input_image.size
-    factor = resolution / max(width, height)
+    factor = scale / max(width, height)
     factor = math.ceil(min(width, height) * factor / 64) * 64 / min(width, height)
     width = int((width * factor) // 64) * 64
     height = int((height * factor) // 64) * 64
@@ -207,11 +207,13 @@ def create_tab(tabname):
                 #with gr.Column():
                         #ip2p_button = gr.Button("Back to input")
 
-                with gr.Row():
+                with gr.Column():
                     steps = gr.Number(value=10, precision=0, label="Steps", interactive=True)
                     batch_number = gr.Number(value=1, label="Number Batches", precision=0, interactive=True)
-                    resolution = gr.Number(value=512, label="Output Resolution", precision=0, interactive=True)
+                    
                 with gr.Row():
+                    scale = gr.Slider(minimum=64, maximum=4096, step=64, label="Output Resolution", value=512, elem_id="ip2p_scale")
+                    #resolution = gr.Number(value=1, label="Output Resolution", precision=0, interactive=True)
                     randomize_seed = gr.Radio(
                         ["Fix Seed", "Randomize Seed"],
                         value="Randomize Seed",
@@ -219,8 +221,9 @@ def create_tab(tabname):
                         show_label=False,
                         interactive=True,
                     )
-                    seed = gr.Number(value=1371, precision=0, label="Seed", interactive=True)
-                    randomize_cfg = gr.Radio(
+                    text_cfg_scale = gr.Number(value=7.5, precision=None, label=f"Text CFG", interactive=True, max_width=10, step=0.01)
+                    image_cfg_scale = gr.Number(value=1.5, precision=None, label=f"Image CFG", interactive=True, max_width=10, step=0.01)
+                    randomize_cfg = gr.Radio(  
                         ["Fix CFG", "Randomize CFG"],
                         value="Fix CFG",
                         type="index",
@@ -228,9 +231,7 @@ def create_tab(tabname):
                         interactive=True,
                     )
                 with gr.Row(max_width=50):
-                    text_cfg_scale = gr.Number(value=7.5, label=f"Text CFG", interactive=True, max_width=10)
-                    image_cfg_scale = gr.Number(value=1.5, label=f"Image CFG", interactive=True, max_width=10)
-                    
+                    seed = gr.Number(value=1371, precision=0, label="Seed", interactive=True)                  
                     gen_inputs=[
                         input_image,
                         prompt,
@@ -242,7 +243,7 @@ def create_tab(tabname):
                         image_cfg_scale,
                         negative_prompt,
                         batch_number,
-                        resolution
+                        scale
                     ]
 
                     gen_outputs=[
