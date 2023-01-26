@@ -242,16 +242,17 @@ def create_tab(tabname):
                         generate_button = gr.Button(value="Generate", show_progress=True)
       
                 with gr.Row():
-                    input_image = gr.Image(label="Image for ip2p", elem_id="ip2p_image", show_label=False, source="upload", interactive=True, type="pil", tool="editor").style(height=480)
+                    input_image = gr.Image(label="Disabled for batch input images", elem_id="ip2p_image", show_label=False, source="upload", interactive=True, type="pil", tool="editor").style(height=480)
                     ip2p_gallery, html_info_x, html_info, html_log = create_output_panel("ip2p", outdir)
                     
                 with gr.Row():
-                    batch_in_check = gr.Checkbox(label="Batch Input")
-                    batch_in_dir = gr.Textbox(label="Directory for batch input")
+                    batch_number = gr.Number(value=1, label="Output Batches", precision=0, interactive=True)
+                    batch_in_dir = gr.Textbox(label="Directory for batch input images")    
+                    batch_in_check = gr.Checkbox(label="Use batch input directory as image source")
 
                 with gr.Column():
                     steps = gr.Number(value=10, precision=0, label="Steps", interactive=True)
-                    batch_number = gr.Number(value=1, label="Number Batches", precision=0, interactive=True)
+                    
                     
                 with gr.Row():
                     seed = gr.Number(value=1371, precision=0, label="Seed", interactive=True, show_progress=False)  
@@ -275,6 +276,7 @@ def create_tab(tabname):
                     )
                 with gr.Row(max_width=50):
                     scale = gr.Slider(minimum=64, maximum=4096, step=64, label="Output Image Width", value=512, elem_id="ip2p_scale")                 
+
                     gen_inputs=[
                         input_image,
                         prompt,
