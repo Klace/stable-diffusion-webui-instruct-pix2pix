@@ -87,7 +87,7 @@ def generate(
         return [seed, text_cfg_scale, image_cfg_scale, None]
 
     if batch_in_check and os.path.exists(batch_in_dir):
-        for filename in os.listdir(batch_in_dir):
+        for filename in sorted(os.listdir(batch_in_dir)):
             with open(os.path.join(batch_in_dir, filename), 'rb') as f: # open in readonly mode
                 try:
                     im=Image.open(f)
