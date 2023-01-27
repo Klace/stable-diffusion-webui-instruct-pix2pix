@@ -110,19 +110,20 @@ def generate(
 
     orig_batch_number = batch_number
 
-    print(f"Processing {len(input_images)} images")
+    print(f"Processing {len(input_images)} image(s)")
 
-    while batch_number > 0:
-        while len(input_images) > 0:
-  
-            if batch_in_check:
-                filename = input_images.pop(0)
-                input_image = Image.open(os.path.join(batch_in_dir, filename))
-            else:
-                input_image = input_images.pop(0)
-                            
-            cur_batch_number = orig_batch_number
 
+    while len(input_images) > 0:
+
+        if batch_in_check:
+            filename = input_images.pop(0)
+            input_image = Image.open(os.path.join(batch_in_dir, filename))
+        else:
+            input_image = input_images.pop(0)
+                        
+        
+        while batch_number > 0:
+            
             model = shared.sd_model
             model.eval().cuda()
             model_wrap = K.external.CompVisDenoiser(model)
@@ -137,15 +138,15 @@ def generate(
             factor = math.ceil(min(width, height) * factor / 64) * 64 / min(width, height)
             width = int((width * factor) // 64) * 64
             height = int((height * factor) // 64) * 64
-            input_image = ImageOps.fit(input_image, (width, height), method=Image.Resampling.LANCZOS)
-
+            in_image = ImageOps.fit(input_image, (width, height), method=Image.Resampling.LANCZOS)
+   
             with torch.no_grad(), autocast("cuda"), model.ema_scope():
                
                 cond = {}
                 cond["c_crossattn"] = [model.get_learned_conditioning([instruction])]
-                input_image = 2 * torch.tensor(np.array(input_image)).float() / 255 - 1
-                input_image = rearrange(input_image, "h w c -> 1 c h w").to(model.device)
-                cond["c_concat"] = [model.encode_first_stage(input_image).mode()]
+                in_image = 2 * torch.tensor(np.array(in_image)).float() / 255 - 1
+                in_image = rearrange(in_image, "h w c -> 1 c h w").to(model.device)
+                cond["c_concat"] = [model.encode_first_stage(in_image).mode()]
 
                 uncond = {}
                 uncond["c_crossattn"] = [model.get_learned_conditioning([negative_prompt])]
@@ -187,10 +188,13 @@ def generate(
                 images.save_image(Image.fromarray(x.type(torch.uint8).cpu().numpy()), outdir, "ip2p", seed, instruction, "png", info=generation_params_text)
             
                 images_array.append(edited_image)
-                
+                batch_number -= 1
+                seed += 1
+        batch_number = orig_batch_number
+        seded = orig_seed
+            
 
-        batch_number -= 1
-        seed += 1
+
     return [orig_seed, text_cfg_scale, image_cfg_scale, images_array]
 
 def reset():
@@ -245,9 +249,7 @@ def add_style(name: str, prompt: str, negative_prompt: str):
 
     return [gr.Dropdown.update(visible=True, choices=list(shared.prompt_styles.styles)) for _ in range(2)]
 
-def create_tab(tabname):
-        
-            
+def create_tab(tabname):  
         with gr.Column(visible=True, elem_id="ip2p_tab") as main_panel:
             ip2p_prompt, ip2p_prompt_styles, ip2p_negative_prompt, submit, ip2p_interrogate, ip2p_deepbooru, ip2p_prompt_style_apply, ip2p_save_style, ip2p_paste, extra_networks_button, token_counter, token_button, negative_token_counter, negative_token_button = create_toprow(is_img2img=True)
 ##            with gr.Row():
@@ -284,8 +286,8 @@ def create_tab(tabname):
                                             interactive=True,
                                         )                                        
                                     with gr.Row():
-                                        text_cfg_scale = gr.Number(value=7.5, precision=None, label=f"Text CFG", interactive=True, max_width=10, step=0.01, show_progress=False)
-                                        image_cfg_scale = gr.Number(value=1.5, precision=None, label=f"Image CFG", interactive=True, max_width=10, step=0.01, show_progress=False)
+                                        text_cfg_scale = gr.Slider(minimum=0.5, maximum=30, value=7.5, precision=2, label=f"Text CFG", interactive=True, max_width=10, step=0.05, show_progress=False)
+                                        image_cfg_scale = gr.Slider(minimum=0.5, maximum=30, value=1.5, label=f"Image CFG", interactive=True, max_width=10, step=0.05, show_progress=False)
                                         randomize_cfg = gr.Radio(  
                                             ["Fix CFG", "Randomize CFG"],
                                             value="Fix CFG",
