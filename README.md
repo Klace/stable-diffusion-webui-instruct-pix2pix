@@ -1,7 +1,7 @@
 # stable-diffusion-webui-instruct-pix2pix
 Extension for webui to run instruct-pix2pix models
 
-Code Based on: https://www.timothybrooks.com/instruct-pix2pix/
+Code based on: https://www.timothybrooks.com/instruct-pix2pix/
 (see LICENSE for more info)
 
 Examples from original creator:
