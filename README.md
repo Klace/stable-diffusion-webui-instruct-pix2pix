@@ -4,6 +4,7 @@ Extension for webui to run instruct-pix2pix models
 Code Based on: https://www.timothybrooks.com/instruct-pix2pix/
 (see LICENSE for more info)
 
+Examples from original creator:
 ![image](https://user-images.githubusercontent.com/26013475/214625822-2e60f5b1-fdc9-44ca-996d-6e7cddab8d67.png)
 
 Download the instruct-pix2pix-00-22000 model manually from here: https://huggingface.co/timbrooks/instruct-pix2pix/tree/main
