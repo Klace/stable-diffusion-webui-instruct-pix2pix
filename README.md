@@ -16,7 +16,7 @@ Model does not work with img2img or txt2img. Merging is possible but requires mo
 
 Embeddings for 1.5 work, as does emphasis.
 
-ToDo: Button to send output back to input, scripts, proper batching, etc...
+Todo: Sampler selection
 
 Feel free to use my modified Image Browser extension for native browsing support (and enhanced sort and filter features compared to normal repo):
 
