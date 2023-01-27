@@ -22,9 +22,13 @@ import stat
 import gradio as gr
 import modules.extras
 from modules.ui_common import create_output_panel
+from modules.ui_components import FormRow, FormGroup, ToolButton, FormHTML
+from modules.ui import create_toprow, process_interrogate, interrogate, interrogate_deepbooru, apply_styles, update_token_counter
 import json
 import re
 import modules.images as images
+from modules.call_queue import wrap_gradio_gpu_call, wrap_queued_call, wrap_gradio_call
+from modules import ui_extra_networks
 from modules.shared import opts, cmd_opts, OptionInfo
 from modules import shared, scripts
 from modules import script_callbacks
@@ -167,8 +171,8 @@ def generate(
 
                 generation_params = {
                     "ip2p": "Yes",
-                    "Prompt:": instruction,
-                    "Negative Prompt:": negative_prompt,
+                    "Prompt": instruction,
+                    "Negative Prompt": negative_prompt,
                     "Steps": steps,
                     "Sampler": "Euler A",
                     "Image CFG scale": image_cfg_scale,
@@ -229,64 +233,94 @@ example_instructions = [
 ]
 
 
+def add_style(name: str, prompt: str, negative_prompt: str):
+    if name is None:
+        return [gr_show() for x in range(4)]
+
+    style = modules.styles.PromptStyle(name, prompt, negative_prompt)
+    shared.prompt_styles.styles[style.name] = style
+    # Save all loaded prompt styles: this allows us to update the storage format in the future more easily, because we
+    # reserialize all styles every time we save them
+    shared.prompt_styles.save_styles(shared.styles_filename)
+
+    return [gr.Dropdown.update(visible=True, choices=list(shared.prompt_styles.styles)) for _ in range(2)]
+
 def create_tab(tabname):
         
             
-        with gr.Row(visible=True, elem_id="ip2p_tab") as main_panel:
-            with gr.Column():
-                with gr.Row():
-                    with gr.Column(elem_id=f"ip2p_prompt_container", scale=6):
-                        prompt = gr.Textbox(label="Prompt", elem_id=f"ip2p_prompt", show_label=False, lines=2, placeholder="Prompt")
-                        negative_prompt = gr.Textbox(label="Negative Prompt", elem_id=f"ip2p_negative_prompt", show_label=False, lines=2, placeholder="Negative Prompt")
-                    with gr.Row(elem_id=f"ip2p_generate_box"):
-                        generate_button = gr.Button(value="Generate", show_progress=True)
-      
-                with gr.Row():
-                    input_image = gr.Image(label="Disabled for batch input images", elem_id="ip2p_image", show_label=False, source="upload", interactive=True, type="pil", tool="editor").style(height=480)
-                    ip2p_gallery, html_info_x, html_info, html_log = create_output_panel("ip2p", outdir)
-                    
-                with gr.Row():
-                    batch_number = gr.Number(value=1, label="Output Batches", precision=0, interactive=True)
-                    batch_in_dir = gr.Textbox(label="Directory for batch input images")    
-                    batch_in_check = gr.Checkbox(label="Use batch input directory as image source")
+        with gr.Column(visible=True, elem_id="ip2p_tab") as main_panel:
+            ip2p_prompt, ip2p_prompt_styles, ip2p_negative_prompt, submit, ip2p_interrogate, ip2p_deepbooru, ip2p_prompt_style_apply, ip2p_save_style, ip2p_paste, extra_networks_button, token_counter, token_button, negative_token_counter, negative_token_button = create_toprow(is_img2img=True)
+##            with gr.Row():
+##                with gr.Column(elem_id=f"ip2p_prompt_container", scale=6):
+##                    prompt = gr.Textbox(label="Prompt", elem_id=f"ip2p_prompt", show_label=False, lines=2, placeholder="Prompt")
+##                    negative_prompt = gr.Textbox(label="Negative Prompt", elem_id=f"ip2p_negative_prompt", show_label=False, lines=2, placeholder="Negative Prompt")
+##                with gr.Column():
+##                    generate_button = gr.Button(value="Generate", show_progress=True)
+            with FormRow(variant='compact', elem_id="ip2p_extra_networks", visible=False) as extra_networks:
+                from modules import ui_extra_networks
+                extra_networks_ui_ip2p = ui_extra_networks.create_ui(extra_networks, extra_networks_button, 'ip2p')
+            dummy_component = gr.Label(visible=False)
+            with gr.Row():
+                with gr.Tabs(elem_id="mode_ip2p"):
+                    with gr.Row():
+                        with gr.Tab(elem_id="input_ip2p", label="Input"):
+                            with gr.Row():
+                                with gr.Column():
+                                    init_img = gr.Image(label="Disabled for batch input images", elem_id="ip2p_image", show_label=True, source="upload", type="pil")
+                                    with gr.Row():
+                                        batch_in_check = gr.Checkbox(label="Use batch input directory as image source")
+                                        batch_in_dir = gr.Textbox(label="Directory for batch input images")
+                                        batch_out_dir = gr.Textbox(label="Directory for batch output images", visible=False) 
+                                    with gr.Row():
+                                        batch_number = gr.Number(value=1, label="Output Batches", precision=0, interactive=True)
+                                        steps = gr.Number(value=10, precision=0, label="Steps", interactive=True)
+                                    with gr.Row():
+                                        seed = gr.Number(value=1371, precision=0, label="Seed", interactive=True, show_progress=False)
+                                        randomize_seed = gr.Radio(
+                                            ["Fix Seed", "Randomize Seed"],
+                                            value="Randomize Seed",
+                                            type="index",
+                                            show_label=False,
+                                            interactive=True,
+                                        )                                        
+                                    with gr.Row():
+                                        text_cfg_scale = gr.Number(value=7.5, precision=None, label=f"Text CFG", interactive=True, max_width=10, step=0.01, show_progress=False)
+                                        image_cfg_scale = gr.Number(value=1.5, precision=None, label=f"Image CFG", interactive=True, max_width=10, step=0.01, show_progress=False)
+                                        randomize_cfg = gr.Radio(  
+                                            ["Fix CFG", "Randomize CFG"],
+                                            value="Fix CFG",
+                                            type="index",
+                                            show_label=False,
+                                            interactive=True,
+                                        )
+                                    with gr.Row(max_width=50):
+                                         scale = gr.Slider(minimum=64, maximum=2048, step=8, label="Output Image Width", value=512, elem_id="ip2p_scale") 
+                with gr.Tabs(elemn_id="output_ip2p"):
+                    with gr.TabItem(elem_id="output_ip2p", label="Output"):
+                        ip2p_gallery, html_info_x, html_info, html_log = create_output_panel("ip2p", outdir)
+     
 
-                with gr.Column():
-                    steps = gr.Number(value=10, precision=0, label="Steps", interactive=True)
-                    
-                    
-                with gr.Row():
-                    seed = gr.Number(value=1371, precision=0, label="Seed", interactive=True, show_progress=False)  
-                    
-                    #resolution = gr.Number(value=1, label="Output Resolution", precision=0, interactive=True)
-                    randomize_seed = gr.Radio(
-                        ["Fix Seed", "Randomize Seed"],
-                        value="Randomize Seed",
-                        type="index",
-                        show_label=False,
-                        interactive=True,
-                    )
-                    text_cfg_scale = gr.Number(value=7.5, precision=None, label=f"Text CFG", interactive=True, max_width=10, step=0.01, show_progress=False)
-                    image_cfg_scale = gr.Number(value=1.5, precision=None, label=f"Image CFG", interactive=True, max_width=10, step=0.01, show_progress=False)
-                    randomize_cfg = gr.Radio(  
-                        ["Fix CFG", "Randomize CFG"],
-                        value="Fix CFG",
-                        type="index",
-                        show_label=False,
-                        interactive=True,
-                    )
-                with gr.Row(max_width=50):
-                    scale = gr.Slider(minimum=64, maximum=4096, step=64, label="Output Image Width", value=512, elem_id="ip2p_scale")                 
-
+                    interrogate_args = dict(
+                        _js="get_img2img_tab_index",
+                        inputs=[
+                            dummy_component,
+                            batch_in_dir,
+                            batch_in_dir,
+                            init_img                            
+                        ],
+                        outputs=[ip2p_prompt, dummy_component],
+                    )                   
+                           
                     gen_inputs=[
-                        input_image,
-                        prompt,
+                        init_img,
+                        ip2p_prompt,
                         steps,
                         randomize_seed,
                         seed,
                         randomize_cfg,
                         text_cfg_scale,
                         image_cfg_scale,
-                        negative_prompt,
+                        ip2p_negative_prompt,
                         batch_number,
                         scale,
                         batch_in_check,
@@ -300,40 +334,89 @@ def create_tab(tabname):
                         ip2p_gallery
                     ]
 
-                    generate_button.click(
+                    submit.click(
                         fn=generate,
                         inputs=gen_inputs,
                         outputs=gen_outputs,
                         show_progress=True,
                     )
 
-                    prompt.submit(
+                    ip2p_prompt.submit(
                         fn=generate,
                         inputs=gen_inputs,
                         outputs=gen_outputs,
                         show_progress=True,
                     )
 
-                    negative_prompt.submit(
+                    ip2p_negative_prompt.submit(
                         fn=generate,
                         inputs=gen_inputs,
                         outputs=gen_outputs,
                         show_progress=True,
                     )
 
+                    ip2p_interrogate.click(
+                        fn=lambda *args: process_interrogate(interrogate, *args),
+                        **interrogate_args,
+                    )
+
+                    ip2p_deepbooru.click(
+                        fn=lambda *args: process_interrogate(interrogate_deepbooru, *args),
+                        **interrogate_args,
+                    )
+
+                    prompts = [(ip2p_prompt, ip2p_negative_prompt)]
+                    style_dropdowns = [ip2p_prompt_styles]
+                    style_js_funcs = ["update_ip2p_tokens"]
+
+            for button, (ip2p_prompt, ip2p_negative_prompt) in zip([ip2p_save_style], prompts):
+                button.click(
+                    fn=add_style,
+                    _js="ask_for_style_name",
+                    # Have to pass empty dummy component here, because the JavaScript and Python function have to accept
+                    # the same number of parameters, but we only know the style-name after the JavaScript prompt
+                    inputs=[dummy_component, ip2p_prompt, ip2p_negative_prompt],
+                    outputs=[ip2p_prompt_styles, ip2p_prompt_styles],
+                )
+
+            for button, (ip2p_prompt, ip2p_negative_prompt), styles, js_func in zip([ip2p_prompt_style_apply], prompts, style_dropdowns, style_js_funcs):
+                button.click(
+                    fn=apply_styles,
+                    #_js=js_func,
+                    inputs=[ip2p_prompt, ip2p_negative_prompt, styles],
+                    outputs=[ip2p_prompt, ip2p_negative_prompt, styles],
+                )
+
+            token_button.click(fn=update_token_counter, inputs=[ip2p_prompt, steps], outputs=[token_counter])
+            negative_token_button.click(fn=wrap_queued_call(update_token_counter), inputs=[ip2p_negative_prompt, steps], outputs=[negative_token_counter])
+
+            ui_extra_networks.setup_ui(extra_networks_ui_ip2p, ip2p_gallery)
+
+            ip2p_paste_fields = [
+                (ip2p_prompt, "Prompt"),
+                (ip2p_negative_prompt, "Negative prompt"),
+                (steps, "Steps"),
+                #(sampler_index, "Sampler"),
+                #(restore_faces, "Face restoration"),
+                (image_cfg_scale, "Image CFG scale"),
+                (text_cfg_scale, "Text CFG scale"),
+                (seed, "Seed"),
+                (batch_number, "Batch size")
+            ]
+            parameters_copypaste.add_paste_fields("ip2p", init_img, ip2p_paste_fields)
+
+                               
 tabs_list = ["ip2p"]
     
     
 def on_ui_tabs():
-    
-        
     with gr.Blocks(analytics_enabled=False) as i2p2p:
         with gr.Tabs(elem_id="ip2p_tab)") as tabs:
             for tab in tabs_list:
                 with gr.Tab(tab):
                     with gr.Blocks(analytics_enabled=False):    
                         create_tab(tab)
-    return (i2p2p, "Instruct-pix2pix", "ip2p"),
+        return (i2p2p, "Instruct-pix2pix", "ip2p"),
 
 def on_ui_settings():
     section = ('ip2p', "Instruct-pix2pix")
