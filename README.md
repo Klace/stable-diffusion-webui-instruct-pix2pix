@@ -10,7 +10,7 @@ Download the instruct-pix2pix-00-22000 model manually from here: https://hugging
 
 After loading the model you can use the extension.
 
-![image](https://user-images.githubusercontent.com/26013475/214627261-1c344150-5e51-4ab6-bfad-50fb20fe5155.png)
+![image](https://user-images.githubusercontent.com/26013475/215025842-f72dda01-0a33-4d32-b745-de9d9503ade2.png)
 
 Model does not work with img2img or txt2img. Merging is possible but requires modification to extras.py (out of scope for now)
 
