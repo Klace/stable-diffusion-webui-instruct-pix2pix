@@ -176,12 +176,27 @@ def create_tab(tabname):
             return [input_image, seed]
 
         images_array = []
-        orig_seed = seed
+        
         text_cfg_scale = round(random.uniform(6.0, 9.0), ndigits=2) if randomize_cfg else text_cfg_scale
         image_cfg_scale = round(random.uniform(1.2, 1.8), ndigits=2) if randomize_cfg else image_cfg_scale
         seed = random.randint(0, 100000) if randomize_seed else seed
+        orig_seed = seed
         orig_batch_number = batch_number
 
+        gen_info = {
+            "Prompt": instruction,
+            "Negative Prompt": negative_prompt,
+            "Steps": steps,
+            "Sampler": "Euler A",
+            "Image CFG scale": image_cfg_scale,
+            "Text CFG scale": image_cfg_scale,
+            "Seed": seed,
+            "Model hash": (None if not opts.add_model_hash_to_info or not shared.sd_model.sd_model_hash else shared.sd_model.sd_model_hash),
+            "Model": (None if not opts.add_model_name_to_info or not shared.sd_model.sd_checkpoint_info.model_name else shared.sd_model.sd_checkpoint_info.model_name.replace(',', '').replace(':', '')),
+            "Model Type": "instruct-pix2pix"                     
+        }
+
+        gen_info = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in gen_info.items() if v is not None])
         print(f"Processing {len(input_images)} image(s)")
 
 
@@ -235,7 +250,6 @@ def create_tab(tabname):
                     edited_image = Image.fromarray(x.type(torch.uint8).cpu().numpy())
 
                     generation_params = {
-                        "ip2p": "Yes",
                         "Prompt": instruction,
                         "Negative Prompt": negative_prompt,
                         "Steps": steps,
@@ -245,16 +259,17 @@ def create_tab(tabname):
                         "Seed": seed,
                         "Model hash": (None if not opts.add_model_hash_to_info or not shared.sd_model.sd_model_hash else shared.sd_model.sd_model_hash),
                         "Model": (None if not opts.add_model_name_to_info or not shared.sd_model.sd_checkpoint_info.model_name else shared.sd_model.sd_checkpoint_info.model_name.replace(',', '').replace(':', '')),
-             
+                        "Model Type": "instruct-pix2pix"                     
                     }
                     generation_params_text = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in generation_params.items() if v is not None])
                     images.save_image(Image.fromarray(x.type(torch.uint8).cpu().numpy()), outdir, "ip2p", seed, instruction, "png", info=generation_params_text)
                     images_array.append(edited_image)
                     batch_number -= 1
                     seed += 1
+                    torch.cuda.empty_cache()
             batch_number = orig_batch_number
             seed = orig_seed
-        return [orig_seed, text_cfg_scale, image_cfg_scale, images_array]
+        return [orig_seed, text_cfg_scale, image_cfg_scale, images_array, gen_info]
 
     with gr.Column(visible=True, elem_id="ip2p_tab") as main_panel:
         ip2p_prompt, ip2p_prompt_styles, ip2p_negative_prompt, submit, ip2p_interrogate, ip2p_deepbooru, ip2p_prompt_style_apply, ip2p_save_style, ip2p_paste, extra_networks_button, token_counter, token_button, negative_token_counter, negative_token_button = create_toprow(is_img2img=True)
@@ -300,6 +315,7 @@ def create_tab(tabname):
             with gr.Tabs(elemn_id="output_ip2p"):
                 with gr.TabItem(elem_id="output_ip2p", label="Output"):
                     ip2p_gallery, html_info_x, html_info, html_log = create_output_panel("ip2p", outdir)
+                    info_text = gr.Textbox(label="Info")
  
 
                 interrogate_args = dict(
@@ -326,15 +342,17 @@ def create_tab(tabname):
                     batch_number,
                     scale,
                     batch_in_check,
-                    batch_in_dir
+                    batch_in_dir,
                 ]
 
                 gen_outputs=[
                     seed,
                     text_cfg_scale,
                     image_cfg_scale,
-                    ip2p_gallery
+                    ip2p_gallery,
+                    info_text
                 ]
+
 
                 submit.click(
                     fn=generate,
