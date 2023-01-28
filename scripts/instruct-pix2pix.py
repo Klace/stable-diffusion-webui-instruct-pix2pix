@@ -47,6 +47,8 @@ if opts.outdir_samples == "":
     shared.opts.add_option("outdir_ip2p_samples", shared.OptionInfo("outputs/ip2p-images", "Save path for images", section=('ip2p', "Instruct-pix2pix")))
     outdir = opts.outdir_ip2p_samples
 
+
+
 ## Uses example code from https://github.com/timothybrooks/instruct-pix2pix
 ## See accompanying license file for more info
 
@@ -65,137 +67,11 @@ class CFGDenoiser(nn.Module):
         out_cond, out_img_cond, out_uncond = self.inner_model(cfg_z, cfg_sigma, cond=cfg_cond).chunk(3)
         return out_uncond + text_cfg_scale * (out_cond - out_img_cond) + image_cfg_scale * (out_img_cond - out_uncond)
 
-def generate(
-    input_image: Image.Image,
-    instruction: str,
-    steps: int,
-    randomize_seed: bool,
-    seed: int,
-    randomize_cfg: bool,
-    text_cfg_scale: float,
-    image_cfg_scale: float,
-    negative_prompt: str,
-    batch_number: int,
-    scale: int,
-    batch_in_check,
-    batch_in_dir
-    ):
 
-
-    input_images = []
-    if (input_image is None and batch_in_check is False) or (input_image is None and (os.path.exists(batch_in_dir) == False or(batch_in_check and batch_in_dir == "")) ):
-        return [seed, text_cfg_scale, image_cfg_scale, None]
-
-    if batch_in_check and os.path.exists(batch_in_dir):
-        for filename in sorted(os.listdir(batch_in_dir)):
-            with open(os.path.join(batch_in_dir, filename), 'rb') as f: # open in readonly mode
-                try:
-                    im=Image.open(f)
-                    print(f"Adding image: " + filename)
-                    input_images.append(filename)
-                except IOError:
-                    print(f"Ignoring non-image file: " + f)
-        
-    else:
-        input_images.append(input_image)
-        
-        
-    
-   
-    if instruction == "" and negative_prompt == "":
-        return [input_image, seed]
-
-    images_array = []
-    orig_seed = seed
-
-    orig_batch_number = batch_number
-
-    print(f"Processing {len(input_images)} image(s)")
-
-
-    while len(input_images) > 0:
-
-        if batch_in_check:
-            filename = input_images.pop(0)
-            input_image = Image.open(os.path.join(batch_in_dir, filename))
-        else:
-            input_image = input_images.pop(0)
-                        
-        
-        while batch_number > 0:
-            
-            model = shared.sd_model
-            model.eval().cuda()
-            model_wrap = K.external.CompVisDenoiser(model)
-            model_wrap_cfg = CFGDenoiser(model_wrap)
-            null_token = model.get_learned_conditioning([""])
-            seed = random.randint(0, 100000) if randomize_seed else seed
-            text_cfg_scale = round(random.uniform(6.0, 9.0), ndigits=2) if randomize_cfg else text_cfg_scale
-            image_cfg_scale = round(random.uniform(1.2, 1.8), ndigits=2) if randomize_cfg else image_cfg_scale
-            
-            width, height = input_image.size
-            factor = scale / max(width, height)
-            factor = math.ceil(min(width, height) * factor / 64) * 64 / min(width, height)
-            width = int((width * factor) // 64) * 64
-            height = int((height * factor) // 64) * 64
-            in_image = ImageOps.fit(input_image, (width, height), method=Image.Resampling.LANCZOS)
-   
-            with torch.no_grad(), autocast("cuda"), model.ema_scope():
-               
-                cond = {}
-                cond["c_crossattn"] = [model.get_learned_conditioning([instruction])]
-                in_image = 2 * torch.tensor(np.array(in_image)).float() / 255 - 1
-                in_image = rearrange(in_image, "h w c -> 1 c h w").to(model.device)
-                cond["c_concat"] = [model.encode_first_stage(in_image).mode()]
-
-                uncond = {}
-                uncond["c_crossattn"] = [model.get_learned_conditioning([negative_prompt])]
-                uncond["c_concat"] = [torch.zeros_like(cond["c_concat"][0])]
-
-                sigmas = model_wrap.get_sigmas(steps)
-
-                extra_args = {
-                    "cond": cond,
-                    "uncond": uncond,
-                    "text_cfg_scale": text_cfg_scale,
-                    "image_cfg_scale": image_cfg_scale,
-                }
-                
-        
-                torch.manual_seed(seed)
-                z = torch.randn_like(cond["c_concat"][0]) * sigmas[0]
-                z = K.sampling.sample_euler_ancestral(model_wrap_cfg, z, sigmas, extra_args=extra_args)
-                x = model.decode_first_stage(z)
-                x = torch.clamp((x + 1.0) / 2.0, min=0.0, max=1.0)
-                x = 255.0 * rearrange(x, "1 c h w -> h w c")
-                edited_image = Image.fromarray(x.type(torch.uint8).cpu().numpy())
-
-                generation_params = {
-                    "ip2p": "Yes",
-                    "Prompt": instruction,
-                    "Negative Prompt": negative_prompt,
-                    "Steps": steps,
-                    "Sampler": "Euler A",
-                    "Image CFG scale": image_cfg_scale,
-                    "Text CFG scale": image_cfg_scale,
-                    "Seed": seed,
-                    "Model hash": (None if not opts.add_model_hash_to_info or not shared.sd_model.sd_model_hash else shared.sd_model.sd_model_hash),
-                    "Model": (None if not opts.add_model_name_to_info or not shared.sd_model.sd_checkpoint_info.model_name else shared.sd_model.sd_checkpoint_info.model_name.replace(',', '').replace(':', '')),
-         
-                }
-                generation_params_text = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in generation_params.items() if v is not None])
-            
-                images.save_image(Image.fromarray(x.type(torch.uint8).cpu().numpy()), outdir, "ip2p", seed, instruction, "png", info=generation_params_text)
-            
-                images_array.append(edited_image)
-                batch_number -= 1
-                seed += 1
-        batch_number = orig_batch_number
-        seded = orig_seed
             
 
 
-    return [orig_seed, text_cfg_scale, image_cfg_scale, images_array]
+
 
 def reset():
     return [0, "Randomize Seed", 1371, "Fix CFG", 7.5, 1.5, None]
@@ -249,163 +125,287 @@ def add_style(name: str, prompt: str, negative_prompt: str):
 
     return [gr.Dropdown.update(visible=True, choices=list(shared.prompt_styles.styles)) for _ in range(2)]
 
-def create_tab(tabname):  
-        with gr.Column(visible=True, elem_id="ip2p_tab") as main_panel:
-            ip2p_prompt, ip2p_prompt_styles, ip2p_negative_prompt, submit, ip2p_interrogate, ip2p_deepbooru, ip2p_prompt_style_apply, ip2p_save_style, ip2p_paste, extra_networks_button, token_counter, token_button, negative_token_counter, negative_token_button = create_toprow(is_img2img=True)
-##            with gr.Row():
-##                with gr.Column(elem_id=f"ip2p_prompt_container", scale=6):
-##                    prompt = gr.Textbox(label="Prompt", elem_id=f"ip2p_prompt", show_label=False, lines=2, placeholder="Prompt")
-##                    negative_prompt = gr.Textbox(label="Negative Prompt", elem_id=f"ip2p_negative_prompt", show_label=False, lines=2, placeholder="Negative Prompt")
-##                with gr.Column():
-##                    generate_button = gr.Button(value="Generate", show_progress=True)
-            with FormRow(variant='compact', elem_id="ip2p_extra_networks", visible=False) as extra_networks:
-                from modules import ui_extra_networks
-                extra_networks_ui_ip2p = ui_extra_networks.create_ui(extra_networks, extra_networks_button, 'ip2p')
-            dummy_component = gr.Label(visible=False)
-            with gr.Row():
-                with gr.Tabs(elem_id="mode_ip2p"):
-                    with gr.Row():
-                        with gr.Tab(elem_id="input_ip2p", label="Input"):
-                            with gr.Row():
-                                with gr.Column():
-                                    init_img = gr.Image(label="Disabled for batch input images", elem_id="ip2p_image", show_label=True, source="upload", type="pil")
-                                    with gr.Row():
-                                        batch_in_check = gr.Checkbox(label="Use batch input directory as image source")
-                                        batch_in_dir = gr.Textbox(label="Directory for batch input images")
-                                        batch_out_dir = gr.Textbox(label="Directory for batch output images", visible=False) 
-                                    with gr.Row():
-                                        batch_number = gr.Number(value=1, label="Output Batches", precision=0, interactive=True)
-                                        steps = gr.Number(value=10, precision=0, label="Steps", interactive=True)
-                                    with gr.Row():
-                                        seed = gr.Number(value=1371, precision=0, label="Seed", interactive=True, show_progress=False)
-                                        randomize_seed = gr.Radio(
-                                            ["Fix Seed", "Randomize Seed"],
-                                            value="Randomize Seed",
-                                            type="index",
-                                            show_label=False,
-                                            interactive=True,
-                                        )                                        
-                                    with gr.Row():
-                                        text_cfg_scale = gr.Slider(minimum=0.5, maximum=30, value=7.5, precision=2, label=f"Text CFG", interactive=True, max_width=10, step=0.05, show_progress=False)
-                                        image_cfg_scale = gr.Slider(minimum=0.5, maximum=30, value=1.5, label=f"Image CFG", interactive=True, max_width=10, step=0.05, show_progress=False)
-                                        randomize_cfg = gr.Radio(  
-                                            ["Fix CFG", "Randomize CFG"],
-                                            value="Fix CFG",
-                                            type="index",
-                                            show_label=False,
-                                            interactive=True,
-                                        )
-                                    with gr.Row(max_width=50):
-                                         scale = gr.Slider(minimum=64, maximum=2048, step=8, label="Output Image Width", value=512, elem_id="ip2p_scale") 
-                with gr.Tabs(elemn_id="output_ip2p"):
-                    with gr.TabItem(elem_id="output_ip2p", label="Output"):
-                        ip2p_gallery, html_info_x, html_info, html_log = create_output_panel("ip2p", outdir)
-     
+def create_tab(tabname):
+                      
 
-                    interrogate_args = dict(
-                        _js="get_img2img_tab_index",
-                        inputs=[
-                            dummy_component,
-                            batch_in_dir,
-                            batch_in_dir,
-                            init_img                            
-                        ],
-                        outputs=[ip2p_prompt, dummy_component],
-                    )                   
-                           
-                    gen_inputs=[
-                        init_img,
-                        ip2p_prompt,
-                        steps,
-                        randomize_seed,
-                        seed,
-                        randomize_cfg,
-                        text_cfg_scale,
-                        image_cfg_scale,
-                        ip2p_negative_prompt,
-                        batch_number,
-                        scale,
-                        batch_in_check,
-                        batch_in_dir
-                    ]
+    def generate(
+        input_image: Image.Image,
+        instruction: str,
+        steps: int,
+        randomize_seed: bool,
+        seed: int,
+        randomize_cfg: bool,
+        text_cfg_scale: float,
+        image_cfg_scale: float,
+        negative_prompt: str,
+        batch_number: int,
+        scale: int,
+        batch_in_check,
+        batch_in_dir
+        ):
 
-                    gen_outputs=[
-                        seed,
-                        text_cfg_scale,
-                        image_cfg_scale,
-                        ip2p_gallery
-                    ]
+        
+        model = shared.sd_model
+        model.eval().cuda()
+        model_wrap = K.external.CompVisDenoiser(model)
+        model_wrap_cfg = CFGDenoiser(model_wrap)
+        null_token = model.get_learned_conditioning([""])
 
-                    submit.click(
-                        fn=generate,
-                        inputs=gen_inputs,
-                        outputs=gen_outputs,
-                        show_progress=True,
-                    )
 
-                    ip2p_prompt.submit(
-                        fn=generate,
-                        inputs=gen_inputs,
-                        outputs=gen_outputs,
-                        show_progress=True,
-                    )
+        input_images = []
+        if (input_image is None and batch_in_check is False) or (input_image is None and (os.path.exists(batch_in_dir) == False or(batch_in_check and batch_in_dir == "")) ):
+            return [seed, text_cfg_scale, image_cfg_scale, None]
 
-                    ip2p_negative_prompt.submit(
-                        fn=generate,
-                        inputs=gen_inputs,
-                        outputs=gen_outputs,
-                        show_progress=True,
-                    )
+        if batch_in_check and os.path.exists(batch_in_dir):
+            for filename in sorted(os.listdir(batch_in_dir)):
+                with open(os.path.join(batch_in_dir, filename), 'rb') as f: # open in readonly mode
+                    try:
+                        im=Image.open(f)
+                        print(f"Adding image: " + filename)
+                        input_images.append(filename)
+                    except IOError:
+                        print(f"Ignoring non-image file: " + f)
+            
+        else:
+            input_images.append(input_image)
+            
+            
+        
+       
+        if instruction == "" and negative_prompt == "":
+            return [input_image, seed]
 
-                    ip2p_interrogate.click(
-                        fn=lambda *args: process_interrogate(interrogate, *args),
-                        **interrogate_args,
-                    )
+        images_array = []
+        orig_seed = seed
+        text_cfg_scale = round(random.uniform(6.0, 9.0), ndigits=2) if randomize_cfg else text_cfg_scale
+        image_cfg_scale = round(random.uniform(1.2, 1.8), ndigits=2) if randomize_cfg else image_cfg_scale
+        seed = random.randint(0, 100000) if randomize_seed else seed
+        orig_batch_number = batch_number
 
-                    ip2p_deepbooru.click(
-                        fn=lambda *args: process_interrogate(interrogate_deepbooru, *args),
-                        **interrogate_args,
-                    )
+        print(f"Processing {len(input_images)} image(s)")
 
-                    prompts = [(ip2p_prompt, ip2p_negative_prompt)]
-                    style_dropdowns = [ip2p_prompt_styles]
-                    style_js_funcs = ["update_ip2p_tokens"]
 
-            for button, (ip2p_prompt, ip2p_negative_prompt) in zip([ip2p_save_style], prompts):
-                button.click(
-                    fn=add_style,
-                    _js="ask_for_style_name",
-                    # Have to pass empty dummy component here, because the JavaScript and Python function have to accept
-                    # the same number of parameters, but we only know the style-name after the JavaScript prompt
-                    inputs=[dummy_component, ip2p_prompt, ip2p_negative_prompt],
-                    outputs=[ip2p_prompt_styles, ip2p_prompt_styles],
+        while len(input_images) > 0:
+
+            if batch_in_check:
+                filename = input_images.pop(0)
+                input_image = Image.open(os.path.join(batch_in_dir, filename))
+            else:
+                input_image = input_images.pop(0)
+
+            while batch_number > 0:
+                
+
+                
+                width, height = input_image.size
+                factor = scale / max(width, height)
+                factor = math.ceil(min(width, height) * factor / 64) * 64 / min(width, height)
+                width = int((width * factor) // 64) * 64
+                height = int((height * factor) // 64) * 64
+                in_image = ImageOps.fit(input_image, (width, height), method=Image.Resampling.LANCZOS)
+       
+                with torch.no_grad(), autocast("cuda"), model.ema_scope():
+                   
+                    cond = {}
+                    cond["c_crossattn"] = [model.get_learned_conditioning([instruction])]
+                    in_image = 2 * torch.tensor(np.array(in_image)).float() / 255 - 1
+                    in_image = rearrange(in_image, "h w c -> 1 c h w").to(model.device)
+                    cond["c_concat"] = [model.encode_first_stage(in_image).mode()]
+
+                    uncond = {}
+                    uncond["c_crossattn"] = [model.get_learned_conditioning([negative_prompt])]
+                    uncond["c_concat"] = [torch.zeros_like(cond["c_concat"][0])]
+
+                    sigmas = model_wrap.get_sigmas(steps)
+
+                    extra_args = {
+                        "cond": cond,
+                        "uncond": uncond,
+                        "text_cfg_scale": text_cfg_scale,
+                        "image_cfg_scale": image_cfg_scale,
+                    }
+                    
+            
+                    torch.manual_seed(seed)
+                    z = torch.randn_like(cond["c_concat"][0]) * sigmas[0]
+                    z = K.sampling.sample_euler_ancestral(model_wrap_cfg, z, sigmas, extra_args=extra_args)
+                    x = model.decode_first_stage(z)
+                    x = torch.clamp((x + 1.0) / 2.0, min=0.0, max=1.0)
+                    x = 255.0 * rearrange(x, "1 c h w -> h w c")
+                    edited_image = Image.fromarray(x.type(torch.uint8).cpu().numpy())
+
+                    generation_params = {
+                        "ip2p": "Yes",
+                        "Prompt": instruction,
+                        "Negative Prompt": negative_prompt,
+                        "Steps": steps,
+                        "Sampler": "Euler A",
+                        "Image CFG scale": image_cfg_scale,
+                        "Text CFG scale": image_cfg_scale,
+                        "Seed": seed,
+                        "Model hash": (None if not opts.add_model_hash_to_info or not shared.sd_model.sd_model_hash else shared.sd_model.sd_model_hash),
+                        "Model": (None if not opts.add_model_name_to_info or not shared.sd_model.sd_checkpoint_info.model_name else shared.sd_model.sd_checkpoint_info.model_name.replace(',', '').replace(':', '')),
+             
+                    }
+                    generation_params_text = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in generation_params.items() if v is not None])
+                    images.save_image(Image.fromarray(x.type(torch.uint8).cpu().numpy()), outdir, "ip2p", seed, instruction, "png", info=generation_params_text)
+                    images_array.append(edited_image)
+                    batch_number -= 1
+                    seed += 1
+            batch_number = orig_batch_number
+            seed = orig_seed
+        return [orig_seed, text_cfg_scale, image_cfg_scale, images_array]
+
+    with gr.Column(visible=True, elem_id="ip2p_tab") as main_panel:
+        ip2p_prompt, ip2p_prompt_styles, ip2p_negative_prompt, submit, ip2p_interrogate, ip2p_deepbooru, ip2p_prompt_style_apply, ip2p_save_style, ip2p_paste, extra_networks_button, token_counter, token_button, negative_token_counter, negative_token_button = create_toprow(is_img2img=True)
+        with FormRow(variant='compact', elem_id="ip2p_extra_networks", visible=False) as extra_networks:
+            from modules import ui_extra_networks
+            extra_networks_ui_ip2p = ui_extra_networks.create_ui(extra_networks, extra_networks_button, 'ip2p')
+        dummy_component = gr.Label(visible=False)
+        with gr.Row():
+            with gr.Tabs(elem_id="mode_ip2p"):
+                with gr.Row():
+                    with gr.Tab(elem_id="input_ip2p", label="Input"):
+                        with gr.Row():
+                            with gr.Column():
+                                init_img = gr.Image(label="Disabled for batch input images", elem_id="ip2p_image", show_label=True, source="upload", type="pil")
+                                with gr.Row():
+                                    batch_in_check = gr.Checkbox(label="Use batch input directory as image source")
+                                    batch_in_dir = gr.Textbox(label="Directory for batch input images")
+                                    batch_out_dir = gr.Textbox(label="Directory for batch output images", visible=False) 
+                                with gr.Row():
+                                    batch_number = gr.Number(value=1, label="Output Batches", precision=0, interactive=True)
+                                    steps = gr.Number(value=10, precision=0, label="Steps", interactive=True)
+                                with gr.Row():
+                                    seed = gr.Number(value=1371, precision=0, label="Seed", interactive=True, show_progress=False)
+                                    randomize_seed = gr.Radio(
+                                        ["Fix Seed", "Randomize Seed"],
+                                        value="Randomize Seed",
+                                        type="index",
+                                        show_label=False,
+                                        interactive=True,
+                                    )                                        
+                                with gr.Row():
+                                    text_cfg_scale = gr.Slider(minimum=0.5, maximum=30, value=7.5, precision=2, label=f"Text CFG", interactive=True, max_width=10, step=0.05, show_progress=False)
+                                    image_cfg_scale = gr.Slider(minimum=0.5, maximum=30, value=1.5, label=f"Image CFG", interactive=True, max_width=10, step=0.05, show_progress=False)
+                                    randomize_cfg = gr.Radio(  
+                                        ["Fix CFG", "Randomize CFG"],
+                                        value="Fix CFG",
+                                        type="index",
+                                        show_label=False,
+                                        interactive=True,
+                                    )
+                                with gr.Row(max_width=50):
+                                     scale = gr.Slider(minimum=64, maximum=2048, step=8, label="Output Image Width", value=512, elem_id="ip2p_scale") 
+            with gr.Tabs(elemn_id="output_ip2p"):
+                with gr.TabItem(elem_id="output_ip2p", label="Output"):
+                    ip2p_gallery, html_info_x, html_info, html_log = create_output_panel("ip2p", outdir)
+ 
+
+                interrogate_args = dict(
+                    _js="get_img2img_tab_index",
+                    inputs=[
+                        dummy_component,
+                        batch_in_dir,
+                        batch_in_dir,
+                        init_img                            
+                    ],
+                    outputs=[ip2p_prompt, dummy_component],
+                )                   
+                       
+                gen_inputs=[
+                    init_img,
+                    ip2p_prompt,
+                    steps,
+                    randomize_seed,
+                    seed,
+                    randomize_cfg,
+                    text_cfg_scale,
+                    image_cfg_scale,
+                    ip2p_negative_prompt,
+                    batch_number,
+                    scale,
+                    batch_in_check,
+                    batch_in_dir
+                ]
+
+                gen_outputs=[
+                    seed,
+                    text_cfg_scale,
+                    image_cfg_scale,
+                    ip2p_gallery
+                ]
+
+                submit.click(
+                    fn=generate,
+                    inputs=gen_inputs,
+                    outputs=gen_outputs,
+                    show_progress=True,
                 )
 
-            for button, (ip2p_prompt, ip2p_negative_prompt), styles, js_func in zip([ip2p_prompt_style_apply], prompts, style_dropdowns, style_js_funcs):
-                button.click(
-                    fn=apply_styles,
-                    #_js=js_func,
-                    inputs=[ip2p_prompt, ip2p_negative_prompt, styles],
-                    outputs=[ip2p_prompt, ip2p_negative_prompt, styles],
+                ip2p_prompt.submit(
+                    fn=generate,
+                    inputs=gen_inputs,
+                    outputs=gen_outputs,
+                    show_progress=True,
                 )
 
-            token_button.click(fn=update_token_counter, inputs=[ip2p_prompt, steps], outputs=[token_counter])
-            negative_token_button.click(fn=wrap_queued_call(update_token_counter), inputs=[ip2p_negative_prompt, steps], outputs=[negative_token_counter])
+                ip2p_negative_prompt.submit(
+                    fn=generate,
+                    inputs=gen_inputs,
+                    outputs=gen_outputs,
+                    show_progress=True,
+                )
 
-            ui_extra_networks.setup_ui(extra_networks_ui_ip2p, ip2p_gallery)
+                ip2p_interrogate.click(
+                    fn=lambda *args: process_interrogate(interrogate, *args),
+                    **interrogate_args,
+                )
 
-            ip2p_paste_fields = [
-                (ip2p_prompt, "Prompt"),
-                (ip2p_negative_prompt, "Negative prompt"),
-                (steps, "Steps"),
-                #(sampler_index, "Sampler"),
-                #(restore_faces, "Face restoration"),
-                (image_cfg_scale, "Image CFG scale"),
-                (text_cfg_scale, "Text CFG scale"),
-                (seed, "Seed"),
-                (batch_number, "Batch size")
-            ]
-            parameters_copypaste.add_paste_fields("ip2p", init_img, ip2p_paste_fields)
+                ip2p_deepbooru.click(
+                    fn=lambda *args: process_interrogate(interrogate_deepbooru, *args),
+                    **interrogate_args,
+                )
+
+                prompts = [(ip2p_prompt, ip2p_negative_prompt)]
+                style_dropdowns = [ip2p_prompt_styles]
+                style_js_funcs = ["update_ip2p_tokens"]
+
+        for button, (ip2p_prompt, ip2p_negative_prompt) in zip([ip2p_save_style], prompts):
+            button.click(
+                fn=add_style,
+                _js="ask_for_style_name",
+                # Have to pass empty dummy component here, because the JavaScript and Python function have to accept
+                # the same number of parameters, but we only know the style-name after the JavaScript prompt
+                inputs=[dummy_component, ip2p_prompt, ip2p_negative_prompt],
+                outputs=[ip2p_prompt_styles, ip2p_prompt_styles],
+            )
+
+        for button, (ip2p_prompt, ip2p_negative_prompt), styles, js_func in zip([ip2p_prompt_style_apply], prompts, style_dropdowns, style_js_funcs):
+            button.click(
+                fn=apply_styles,
+                #_js=js_func,
+                inputs=[ip2p_prompt, ip2p_negative_prompt, styles],
+                outputs=[ip2p_prompt, ip2p_negative_prompt, styles],
+            )
+
+        token_button.click(fn=update_token_counter, inputs=[ip2p_prompt, steps], outputs=[token_counter])
+        negative_token_button.click(fn=wrap_queued_call(update_token_counter), inputs=[ip2p_negative_prompt, steps], outputs=[negative_token_counter])
+
+        ui_extra_networks.setup_ui(extra_networks_ui_ip2p, ip2p_gallery)
+
+        ip2p_paste_fields = [
+            (ip2p_prompt, "Prompt"),
+            (ip2p_negative_prompt, "Negative prompt"),
+            (steps, "Steps"),
+            #(sampler_index, "Sampler"),
+            #(restore_faces, "Face restoration"),
+            (image_cfg_scale, "Image CFG scale"),
+            (text_cfg_scale, "Text CFG scale"),
+            (seed, "Seed"),
+            (batch_number, "Batch size")
+        ]
+        parameters_copypaste.add_paste_fields("ip2p", init_img, ip2p_paste_fields)
 
                                
 tabs_list = ["ip2p"]
