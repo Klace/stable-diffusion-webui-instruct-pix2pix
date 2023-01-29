@@ -28,7 +28,7 @@ import re
 import modules.images as images
 from modules.call_queue import wrap_gradio_gpu_call, wrap_queued_call, wrap_gradio_call
 from modules import ui_extra_networks
-from modules.shared import opts, cmd_opts, OptionInfo
+from modules.shared import opts, cmd_opts, OptionInfo, devices
 from modules import shared, scripts
 from modules import script_callbacks
 from pathlib import Path
@@ -432,9 +432,13 @@ def create_tab(tabname):
                     images_array.append(edited_image)
                     batch_number -= 1
                     seed += 1
-                    torch.cuda.empty_cache()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        torch.cuda.ipc_collect()
             batch_number = orig_batch_number
             seed = orig_seed
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
         return [orig_seed, text_cfg_scale, image_cfg_scale, images_array, gen_info]
 
     with gr.Column(visible=True, elem_id="ip2p_tab") as main_panel:
