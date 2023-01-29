@@ -27,16 +27,15 @@ import json
 import re
 import modules.images as images
 from modules.call_queue import wrap_gradio_gpu_call, wrap_queued_call, wrap_gradio_call
-from modules import ui_extra_networks
-from modules.shared import opts, cmd_opts, OptionInfo, devices
-from modules import shared, scripts
-from modules import script_callbacks
+from modules import ui_extra_networks, devices, shared, scripts, script_callbacks, sd_hijack_unet, sd_hijack_utils
+from modules.shared import opts, cmd_opts, OptionInfo
 from pathlib import Path
 from typing import List, Tuple
 from PIL.ExifTags import TAGS
 from PIL.PngImagePlugin import PngImageFile, PngInfo
 from datetime import datetime
 from modules.generation_parameters_copypaste import quote
+from copy import deepcopy
 
 
 import modules.generation_parameters_copypaste as parameters_copypaste
@@ -149,133 +148,145 @@ def generate(
     ):
         
     model = shared.sd_model
-    model.eval().cuda()
-    model_wrap = K.external.CompVisDenoiser(model)
-    model_wrap_cfg = CFGDenoiser(model_wrap)
-    
-    null_token = model.get_learned_conditioning([""])
-    input_images = []
+    model.eval().to(shared.device)
 
-    if (input_image is None and batch_in_check is False) or (input_image is None and (os.path.exists(batch_in_dir) == False or(batch_in_check and batch_in_dir == "")) ):
-        return [seed, text_cfg_scale, image_cfg_scale, None]
+    vae = model.first_stage_model
+    # InstructPix2Pix VAE model doesn't work correctly on MPS, so cast it to CPU
+    if shared.device.type == 'mps':
+        model.first_stage_model = deepcopy(model.first_stage_model).cpu()
 
-    if batch_in_check and os.path.exists(batch_in_dir):
-        for filename in sorted(os.listdir(batch_in_dir)):
-            with open(os.path.join(batch_in_dir, filename), 'rb') as f: # open in readonly mode
-                try:
-                    im=Image.open(f)
-                    print(f"Adding image: " + filename)
-                    input_images.append(filename)
-                except IOError:
-                    print(f"Ignoring non-image file: " + f)
+    try:
+        model_wrap = K.external.CompVisDenoiser(model)
+        model_wrap_cfg = CFGDenoiser(model_wrap)
         
-    else:
-        input_images.append(input_image)
-        
-        
+        null_token = model.get_learned_conditioning([""])
+        input_images = []
     
-   
-    if instruction == "" and negative_prompt == "":
-        return [input_image, seed]
-
-    images_array = []
+        if (input_image is None and batch_in_check is False) or (input_image is None and (os.path.exists(batch_in_dir) == False or(batch_in_check and batch_in_dir == "")) ):
+            return [seed, text_cfg_scale, image_cfg_scale, None]
     
-    text_cfg_scale = round(random.uniform(6.0, 9.0), ndigits=2) if randomize_cfg else text_cfg_scale
-    image_cfg_scale = round(random.uniform(1.2, 1.8), ndigits=2) if randomize_cfg else image_cfg_scale
-    seed = random.randint(0, 100000) if randomize_seed else seed
-    orig_seed = seed
-    orig_batch_number = batch_number
-
-    gen_info = {
-        "Prompt": instruction,
-        "Negative Prompt": negative_prompt,
-        "Steps": steps,
-        "Sampler": sampler,
-        "Image CFG scale": image_cfg_scale,
-        "Text CFG scale": text_cfg_scale,
-        "Seed": seed,
-        "Model hash": (None if not opts.add_model_hash_to_info or not shared.sd_model.sd_model_hash else shared.sd_model.sd_model_hash),
-        "Model": (None if not opts.add_model_name_to_info or not shared.sd_model.sd_checkpoint_info.model_name else shared.sd_model.sd_checkpoint_info.model_name.replace(',', '').replace(':', '')),
-        "Model Type": "instruct-pix2pix"                     
-    }
-
-    gen_info = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in gen_info.items() if v is not None])
-    print(f"Processing {len(input_images)} image(s)")
-    while len(input_images) > 0:
-
-        if batch_in_check:
-            filename = input_images.pop(0)
-            input_image = Image.open(os.path.join(batch_in_dir, filename))
+        if batch_in_check and os.path.exists(batch_in_dir):
+            for filename in sorted(os.listdir(batch_in_dir)):
+                with open(os.path.join(batch_in_dir, filename), 'rb') as f: # open in readonly mode
+                    try:
+                        im=Image.open(f)
+                        print(f"Adding image: " + filename)
+                        input_images.append(filename)
+                    except IOError:
+                        print(f"Ignoring non-image file: " + f)
+            
         else:
-            input_image = input_images.pop(0)
-
-        while batch_number > 0:
+            input_images.append(input_image)
             
-
             
-            width, height = input_image.size
-            factor = scale / max(width, height)
-            factor = math.ceil(min(width, height) * factor / 64) * 64 / min(width, height)
-            width = int((width * factor) // 64) * 64
-            height = int((height * factor) // 64) * 64
-            in_image = ImageOps.fit(input_image, (width, height), method=Image.Resampling.LANCZOS)
-   
-            with torch.no_grad(), autocast("cuda"), model.ema_scope():
-               
-                cond = {}
-                cond["c_crossattn"] = [model.get_learned_conditioning([instruction])]
-                in_image = 2 * torch.tensor(np.array(in_image)).float() / 255 - 1
-                in_image = rearrange(in_image, "h w c -> 1 c h w").to(model.device)
-                cond["c_concat"] = [model.encode_first_stage(in_image).mode()]
-
-                uncond = {}
-                uncond["c_crossattn"] = [model.get_learned_conditioning([negative_prompt])]
-                uncond["c_concat"] = [torch.zeros_like(cond["c_concat"][0])]
-
-                sigmas = model_wrap.get_sigmas(steps)
-
-                extra_args = {
-                    "cond": cond,
-                    "uncond": uncond,
-                    "text_cfg_scale": text_cfg_scale,
-                    "image_cfg_scale": image_cfg_scale,
-                }
-                
         
-                torch.manual_seed(seed)
-
-                z = torch.randn_like(cond["c_concat"][0]) * sigmas[0]
-                sampler_function = getattr(K.sampling, samplers_k_diffusion[sampler][1])
-                z = sampler_function(model_wrap_cfg, z, sigmas, extra_args)
-                x = model.decode_first_stage(z)
-                x = torch.clamp((x + 1.0) / 2.0, min=0.0, max=1.0)
-                x = 255.0 * rearrange(x, "1 c h w -> h w c")
-                edited_image = Image.fromarray(x.type(torch.uint8).cpu().numpy())
-
-                generation_params = {
-                    "Prompt": instruction,
-                    "Negative Prompt": negative_prompt,
-                    "Steps": steps,
-                    "Sampler": sampler,
-                    "Image CFG scale": image_cfg_scale,
-                    "Text CFG scale": text_cfg_scale,
-                    "Seed": seed,
-                    "Model hash": (None if not opts.add_model_hash_to_info or not shared.sd_model.sd_model_hash else shared.sd_model.sd_model_hash),
-                    "Model": (None if not opts.add_model_name_to_info or not shared.sd_model.sd_checkpoint_info.model_name else shared.sd_model.sd_checkpoint_info.model_name.replace(',', '').replace(':', '')),
-                    "Model Type": "instruct-pix2pix"                     
-                }
-                generation_params_text = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in generation_params.items() if v is not None])
-                images.save_image(Image.fromarray(x.type(torch.uint8).cpu().numpy()), outdir, "ip2p", seed, instruction, "png", info=generation_params_text)
-                images_array.append(edited_image)
-                batch_number -= 1
-                seed += 1
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    torch.cuda.ipc_collect()
-        batch_number = orig_batch_number
-        seed = orig_seed
-    torch.cuda.empty_cache()
-    torch.cuda.ipc_collect()
+       
+        if instruction == "" and negative_prompt == "":
+            return [input_image, seed]
+    
+        images_array = []
+        
+        text_cfg_scale = round(random.uniform(6.0, 9.0), ndigits=2) if randomize_cfg else text_cfg_scale
+        image_cfg_scale = round(random.uniform(1.2, 1.8), ndigits=2) if randomize_cfg else image_cfg_scale
+        seed = random.randint(0, 100000) if randomize_seed else seed
+        orig_seed = seed
+        orig_batch_number = batch_number
+    
+        gen_info = {
+            "Prompt": instruction,
+            "Negative Prompt": negative_prompt,
+            "Steps": steps,
+            "Sampler": sampler,
+            "Image CFG scale": image_cfg_scale,
+            "Text CFG scale": text_cfg_scale,
+            "Seed": seed,
+            "Model hash": (None if not opts.add_model_hash_to_info or not shared.sd_model.sd_model_hash else shared.sd_model.sd_model_hash),
+            "Model": (None if not opts.add_model_name_to_info or not shared.sd_model.sd_checkpoint_info.model_name else shared.sd_model.sd_checkpoint_info.model_name.replace(',', '').replace(':', '')),
+            "Model Type": "instruct-pix2pix"                     
+        }
+    
+        gen_info = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in gen_info.items() if v is not None])
+        print(f"Processing {len(input_images)} image(s)")
+        while len(input_images) > 0:
+    
+            if batch_in_check:
+                filename = input_images.pop(0)
+                input_image = Image.open(os.path.join(batch_in_dir, filename))
+            else:
+                input_image = input_images.pop(0)
+    
+            while batch_number > 0:
+                
+    
+                
+                width, height = input_image.size
+                factor = scale / max(width, height)
+                factor = math.ceil(min(width, height) * factor / 64) * 64 / min(width, height)
+                width = int((width * factor) // 64) * 64
+                height = int((height * factor) // 64) * 64
+                in_image = ImageOps.fit(input_image, (width, height), method=Image.Resampling.LANCZOS)
+       
+                with torch.no_grad(), autocast("cuda"), model.ema_scope():
+                   
+                    cond = {}
+                    cond["c_crossattn"] = [model.get_learned_conditioning([instruction])]
+                    in_image = 2 * torch.tensor(np.array(in_image)).float() / 255 - 1
+                    in_image = rearrange(in_image, "h w c -> 1 c h w").to(model.first_stage_model.device)
+                    cond["c_concat"] = [model.encode_first_stage(in_image).mode().to(model.device)]
+    
+                    uncond = {}
+                    uncond["c_crossattn"] = [model.get_learned_conditioning([negative_prompt])]
+                    uncond["c_concat"] = [torch.zeros_like(cond["c_concat"][0])]
+    
+                    sigmas = model_wrap.get_sigmas(steps)
+    
+                    extra_args = {
+                        "cond": cond,
+                        "uncond": uncond,
+                        "text_cfg_scale": text_cfg_scale,
+                        "image_cfg_scale": image_cfg_scale,
+                    }
+                    
+            
+                    torch.manual_seed(seed)
+    
+                    z = torch.randn_like(cond["c_concat"][0], device=devices.cpu if model.device.type == 'mps' else None).to(model.device) * sigmas[0]
+                    sampler_function = getattr(K.sampling, samplers_k_diffusion[sampler][1])
+                    z = sampler_function(model_wrap_cfg, z, sigmas, extra_args)
+                    x = model.decode_first_stage(z.to(model.first_stage_model.device))
+                    x = torch.clamp((x + 1.0) / 2.0, min=0.0, max=1.0)
+                    x = 255.0 * rearrange(x, "1 c h w -> h w c")
+                    edited_image = Image.fromarray(x.type(torch.uint8).cpu().numpy())
+    
+                    generation_params = {
+                        "Prompt": instruction,
+                        "Negative Prompt": negative_prompt,
+                        "Steps": steps,
+                        "Sampler": sampler,
+                        "Image CFG scale": image_cfg_scale,
+                        "Text CFG scale": text_cfg_scale,
+                        "Seed": seed,
+                        "Model hash": (None if not opts.add_model_hash_to_info or not shared.sd_model.sd_model_hash else shared.sd_model.sd_model_hash),
+                        "Model": (None if not opts.add_model_name_to_info or not shared.sd_model.sd_checkpoint_info.model_name else shared.sd_model.sd_checkpoint_info.model_name.replace(',', '').replace(':', '')),
+                        "Model Type": "instruct-pix2pix"                     
+                    }
+                    generation_params_text = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in generation_params.items() if v is not None])
+                    images.save_image(Image.fromarray(x.type(torch.uint8).cpu().numpy()), outdir, "ip2p", seed, instruction, "png", info=generation_params_text)
+                    images_array.append(edited_image)
+                    batch_number -= 1
+                    seed += 1
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        torch.cuda.ipc_collect()
+            batch_number = orig_batch_number
+            seed = orig_seed
+    except Exception as e:
+        raise e
+    finally:
+        model.first_stage_model = vae
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
     return [orig_seed, text_cfg_scale, image_cfg_scale, images_array, gen_info]
     
 
@@ -713,7 +724,13 @@ def on_ui_tabs():
 
 def on_ui_settings():
     section = ('ip2p', "Instruct-pix2pix")
-    
+
+
+# --upcast-sampling needs these patches
+sd_hijack_utils.CondFunc('modules.models.diffusion.ddpm_edit.LatentDiffusion.apply_model', sd_hijack_unet.apply_model, sd_hijack_unet.unet_needs_upcast)
+sd_hijack_utils.CondFunc('modules.models.diffusion.ddpm_edit.LatentDiffusion.decode_first_stage', sd_hijack_unet.first_stage_sub, sd_hijack_unet.unet_needs_upcast)
+sd_hijack_utils.CondFunc('modules.models.diffusion.ddpm_edit.LatentDiffusion.encode_first_stage', sd_hijack_unet.first_stage_sub, sd_hijack_unet.unet_needs_upcast)
+
 
 
 
