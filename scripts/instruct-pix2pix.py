@@ -27,10 +27,8 @@ import json
 import re
 import modules.images as images
 from modules.call_queue import wrap_gradio_gpu_call, wrap_queued_call, wrap_gradio_call
-from modules import ui_extra_networks
-from modules.shared import opts, cmd_opts, OptionInfo, devices
-from modules import shared, scripts
-from modules import script_callbacks
+from modules import ui_extra_networks, devices, shared, scripts, script_callbacks, sd_hijack_unet, sd_hijack_utils
+from modules.shared import opts, cmd_opts, OptionInfo
 from pathlib import Path
 from typing import List, Tuple
 from PIL.ExifTags import TAGS
@@ -149,7 +147,11 @@ def generate(
     ):
         
     model = shared.sd_model
-    model.eval().cuda()
+    model.eval().to(shared.device)
+    # InstructPix2Pix VAE model doesn't work correctly on MPS, so cast it to CPU
+    if shared.device.type == 'mps':
+        model.first_stage_model.cpu()
+    
     model_wrap = K.external.CompVisDenoiser(model)
     model_wrap_cfg = CFGDenoiser(model_wrap)
     
@@ -225,8 +227,8 @@ def generate(
                 cond = {}
                 cond["c_crossattn"] = [model.get_learned_conditioning([instruction])]
                 in_image = 2 * torch.tensor(np.array(in_image)).float() / 255 - 1
-                in_image = rearrange(in_image, "h w c -> 1 c h w").to(model.device)
-                cond["c_concat"] = [model.encode_first_stage(in_image).mode()]
+                in_image = rearrange(in_image, "h w c -> 1 c h w").to(model.first_stage_model.device)
+                cond["c_concat"] = [model.encode_first_stage(in_image).mode().to(model.device)]
 
                 uncond = {}
                 uncond["c_crossattn"] = [model.get_learned_conditioning([negative_prompt])]
@@ -244,10 +246,10 @@ def generate(
         
                 torch.manual_seed(seed)
 
-                z = torch.randn_like(cond["c_concat"][0]) * sigmas[0]
+                z = torch.randn_like(cond["c_concat"][0], device=devices.cpu if model.device.type == 'mps' else None).to(model.device) * sigmas[0]
                 sampler_function = getattr(K.sampling, samplers_k_diffusion[sampler][1])
                 z = sampler_function(model_wrap_cfg, z, sigmas, extra_args)
-                x = model.decode_first_stage(z)
+                x = model.decode_first_stage(z.to(model.first_stage_model.device))
                 x = torch.clamp((x + 1.0) / 2.0, min=0.0, max=1.0)
                 x = 255.0 * rearrange(x, "1 c h w -> h w c")
                 edited_image = Image.fromarray(x.type(torch.uint8).cpu().numpy())
@@ -274,8 +276,9 @@ def generate(
                     torch.cuda.ipc_collect()
         batch_number = orig_batch_number
         seed = orig_seed
-    torch.cuda.empty_cache()
-    torch.cuda.ipc_collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
     return [orig_seed, text_cfg_scale, image_cfg_scale, images_array, gen_info]
     
 
@@ -713,7 +716,13 @@ def on_ui_tabs():
 
 def on_ui_settings():
     section = ('ip2p', "Instruct-pix2pix")
-    
+
+
+# --upcast-sampling needs these patches
+sd_hijack_utils.CondFunc('modules.models.diffusion.ddpm_edit.LatentDiffusion.apply_model', sd_hijack_unet.apply_model, sd_hijack_unet.unet_needs_upcast)
+sd_hijack_utils.CondFunc('modules.models.diffusion.ddpm_edit.LatentDiffusion.decode_first_stage', sd_hijack_unet.first_stage_sub, sd_hijack_unet.unet_needs_upcast)
+sd_hijack_utils.CondFunc('modules.models.diffusion.ddpm_edit.LatentDiffusion.encode_first_stage', sd_hijack_unet.first_stage_sub, sd_hijack_unet.unet_needs_upcast)
+
 
 
 
