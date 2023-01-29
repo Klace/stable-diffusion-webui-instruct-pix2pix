@@ -4,7 +4,7 @@ import math
 import random
 import sys
 from argparse import ArgumentParser
-
+from collections import namedtuple, deque
 import einops
 import gradio as gr
 import k_diffusion as K
@@ -38,7 +38,7 @@ from PIL.PngImagePlugin import PngImageFile, PngInfo
 from datetime import datetime
 from modules.generation_parameters_copypaste import quote
 
-from modules.sd_samplers import samplers, samplers_for_img2img
+
 import modules.generation_parameters_copypaste as parameters_copypaste
 sys.path.append("../../")
 outdir = opts.outdir_samples
@@ -46,10 +46,238 @@ if opts.outdir_samples == "":
     shared.opts.add_option("outdir_ip2p_samples", shared.OptionInfo("outputs/ip2p-images", "Save path for images", section=('ip2p', "Instruct-pix2pix")))
     outdir = opts.outdir_ip2p_samples
 
+SamplerData = namedtuple('SamplerData', ['name', 'constructor', 'aliases', 'options'])
 
+samplers_k_diffusion = [
+    ('Euler a', 'sample_euler_ancestral', ['k_euler_a', 'k_euler_ancestral'], {}),
+    ('Euler', 'sample_euler', ['k_euler'], {}),
+    ('LMS', 'sample_lms', ['k_lms'], {}),
+    ('Heun', 'sample_heun', ['k_heun'], {}),
+    ('DPM2', 'sample_dpm_2', ['k_dpm_2'], {'discard_next_to_last_sigma': True}),
+    ('DPM2 a', 'sample_dpm_2_ancestral', ['k_dpm_2_a'], {'discard_next_to_last_sigma': True}),
+    ('DPM++ 2S a', 'sample_dpmpp_2s_ancestral', ['k_dpmpp_2s_a'], {}),
+    ('DPM++ 2M', 'sample_dpmpp_2m', ['k_dpmpp_2m'], {}),
+    ('DPM++ SDE', 'sample_dpmpp_sde', ['k_dpmpp_sde'], {}),
+    ('DPM fast', 'sample_dpm_fast', ['k_dpm_fast'], {}),
+    ('DPM adaptive', 'sample_dpm_adaptive', ['k_dpm_ad'], {}),
+    ('LMS Karras', 'sample_lms', ['k_lms_ka'], {'scheduler': 'karras'}),
+    ('DPM2 Karras', 'sample_dpm_2', ['k_dpm_2_ka'], {'scheduler': 'karras', 'discard_next_to_last_sigma': True}),
+    ('DPM2 a Karras', 'sample_dpm_2_ancestral', ['k_dpm_2_a_ka'], {'scheduler': 'karras', 'discard_next_to_last_sigma': True}),
+    ('DPM++ 2S a Karras', 'sample_dpmpp_2s_ancestral', ['k_dpmpp_2s_a_ka'], {'scheduler': 'karras'}),
+    ('DPM++ 2M Karras', 'sample_dpmpp_2m', ['k_dpmpp_2m_ka'], {'scheduler': 'karras'}),
+    ('DPM++ SDE Karras', 'sample_dpmpp_sde', ['k_dpmpp_sde_ka'], {'scheduler': 'karras'}),
+]
+
+
+samplers_data_k_diffusion = [
+    SamplerData(label, lambda model, funcname=funcname: KDiffusionSampling(funcname, model), aliases, options)
+    for label, funcname, aliases, options in samplers_k_diffusion
+    if hasattr(K.sampling, funcname)
+]
+
+all_samplers = [
+    *samplers_data_k_diffusion,
+    #SamplerData('DDIM', lambda model: VanillaStableDiffusionSampler(ldm.models.diffusion.ddim.DDIMSampler, model), [], {}),
+    #SamplerData('PLMS', lambda model: VanillaStableDiffusionSampler(ldm.models.diffusion.plms.PLMSSampler, model), [], {}),
+]
+all_samplers_map = {x.name: x for x in all_samplers}
+
+samplers = []
+samplers_for_img2img = []
+samplers_map = {}
+
+def create_sampler(name, model):
+    if name is not None:
+        config = all_samplers_map.get(name, None)
+    else:
+        config = all_samplers[0]
+
+    assert config is not None, f'bad sampler name: {name}'
+
+    sampler = config.constructor(model)
+    sampler.config = config
+
+    return sampler
+
+
+def set_samplers():
+    global samplers, samplers_for_img2img
+
+    hidden = set(opts.hide_samplers)
+    hidden_img2img = set(opts.hide_samplers + ['PLMS'])
+
+    samplers = [x for x in all_samplers if x.name not in hidden]
+    samplers_for_img2img = [x for x in all_samplers if x.name not in hidden_img2img]
+
+    samplers_map.clear()
+    for sampler in all_samplers:
+        samplers_map[sampler.name.lower()] = sampler.name
+        for alias in sampler.aliases:
+            samplers_map[alias.lower()] = sampler.name
+
+
+set_samplers()
+
+sampler_extra_params = {
+    'sample_euler': ['s_churn', 's_tmin', 's_tmax', 's_noise'],
+    'sample_heun': ['s_churn', 's_tmin', 's_tmax', 's_noise'],
+    'sample_dpm_2': ['s_churn', 's_tmin', 's_tmax', 's_noise'],
+}
 
 ## Uses example code from https://github.com/timothybrooks/instruct-pix2pix
 ## See accompanying license file for more info
+
+
+def get_sampler(constructor, model):
+    return getattr(k_diffusion.sampling, constructor)
+
+def generate(
+    input_image: Image.Image,
+    instruction: str,
+    steps: int,
+    randomize_seed: bool,
+    seed: int,
+    randomize_cfg: bool,
+    text_cfg_scale: float,
+    image_cfg_scale: float,
+    negative_prompt: str,
+    batch_number: int,
+    scale: int,
+    batch_in_check,
+    batch_in_dir,
+    sampler
+    ):
+        
+    model = shared.sd_model
+    model.eval().cuda()
+    model_wrap = K.external.CompVisDenoiser(model)
+    model_wrap_cfg = CFGDenoiser(model_wrap)
+    
+    null_token = model.get_learned_conditioning([""])
+    input_images = []
+
+    if (input_image is None and batch_in_check is False) or (input_image is None and (os.path.exists(batch_in_dir) == False or(batch_in_check and batch_in_dir == "")) ):
+        return [seed, text_cfg_scale, image_cfg_scale, None]
+
+    if batch_in_check and os.path.exists(batch_in_dir):
+        for filename in sorted(os.listdir(batch_in_dir)):
+            with open(os.path.join(batch_in_dir, filename), 'rb') as f: # open in readonly mode
+                try:
+                    im=Image.open(f)
+                    print(f"Adding image: " + filename)
+                    input_images.append(filename)
+                except IOError:
+                    print(f"Ignoring non-image file: " + f)
+        
+    else:
+        input_images.append(input_image)
+        
+        
+    
+   
+    if instruction == "" and negative_prompt == "":
+        return [input_image, seed]
+
+    images_array = []
+    
+    text_cfg_scale = round(random.uniform(6.0, 9.0), ndigits=2) if randomize_cfg else text_cfg_scale
+    image_cfg_scale = round(random.uniform(1.2, 1.8), ndigits=2) if randomize_cfg else image_cfg_scale
+    seed = random.randint(0, 100000) if randomize_seed else seed
+    orig_seed = seed
+    orig_batch_number = batch_number
+
+    gen_info = {
+        "Prompt": instruction,
+        "Negative Prompt": negative_prompt,
+        "Steps": steps,
+        "Sampler": sampler,
+        "Image CFG scale": image_cfg_scale,
+        "Text CFG scale": text_cfg_scale,
+        "Seed": seed,
+        "Model hash": (None if not opts.add_model_hash_to_info or not shared.sd_model.sd_model_hash else shared.sd_model.sd_model_hash),
+        "Model": (None if not opts.add_model_name_to_info or not shared.sd_model.sd_checkpoint_info.model_name else shared.sd_model.sd_checkpoint_info.model_name.replace(',', '').replace(':', '')),
+        "Model Type": "instruct-pix2pix"                     
+    }
+
+    gen_info = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in gen_info.items() if v is not None])
+    print(f"Processing {len(input_images)} image(s)")
+    while len(input_images) > 0:
+
+        if batch_in_check:
+            filename = input_images.pop(0)
+            input_image = Image.open(os.path.join(batch_in_dir, filename))
+        else:
+            input_image = input_images.pop(0)
+
+        while batch_number > 0:
+            
+
+            
+            width, height = input_image.size
+            factor = scale / max(width, height)
+            factor = math.ceil(min(width, height) * factor / 64) * 64 / min(width, height)
+            width = int((width * factor) // 64) * 64
+            height = int((height * factor) // 64) * 64
+            in_image = ImageOps.fit(input_image, (width, height), method=Image.Resampling.LANCZOS)
+   
+            with torch.no_grad(), autocast("cuda"), model.ema_scope():
+               
+                cond = {}
+                cond["c_crossattn"] = [model.get_learned_conditioning([instruction])]
+                in_image = 2 * torch.tensor(np.array(in_image)).float() / 255 - 1
+                in_image = rearrange(in_image, "h w c -> 1 c h w").to(model.device)
+                cond["c_concat"] = [model.encode_first_stage(in_image).mode()]
+
+                uncond = {}
+                uncond["c_crossattn"] = [model.get_learned_conditioning([negative_prompt])]
+                uncond["c_concat"] = [torch.zeros_like(cond["c_concat"][0])]
+
+                sigmas = model_wrap.get_sigmas(steps)
+
+                extra_args = {
+                    "cond": cond,
+                    "uncond": uncond,
+                    "text_cfg_scale": text_cfg_scale,
+                    "image_cfg_scale": image_cfg_scale,
+                }
+                
+        
+                torch.manual_seed(seed)
+
+                z = torch.randn_like(cond["c_concat"][0]) * sigmas[0]
+                sampler_function = getattr(K.sampling, samplers_k_diffusion[sampler][1])
+                z = sampler_function(model_wrap_cfg, z, sigmas, extra_args)
+                x = model.decode_first_stage(z)
+                x = torch.clamp((x + 1.0) / 2.0, min=0.0, max=1.0)
+                x = 255.0 * rearrange(x, "1 c h w -> h w c")
+                edited_image = Image.fromarray(x.type(torch.uint8).cpu().numpy())
+
+                generation_params = {
+                    "Prompt": instruction,
+                    "Negative Prompt": negative_prompt,
+                    "Steps": steps,
+                    "Sampler": sampler,
+                    "Image CFG scale": image_cfg_scale,
+                    "Text CFG scale": text_cfg_scale,
+                    "Seed": seed,
+                    "Model hash": (None if not opts.add_model_hash_to_info or not shared.sd_model.sd_model_hash else shared.sd_model.sd_model_hash),
+                    "Model": (None if not opts.add_model_name_to_info or not shared.sd_model.sd_checkpoint_info.model_name else shared.sd_model.sd_checkpoint_info.model_name.replace(',', '').replace(':', '')),
+                    "Model Type": "instruct-pix2pix"                     
+                }
+                generation_params_text = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in generation_params.items() if v is not None])
+                images.save_image(Image.fromarray(x.type(torch.uint8).cpu().numpy()), outdir, "ip2p", seed, instruction, "png", info=generation_params_text)
+                images_array.append(edited_image)
+                batch_number -= 1
+                seed += 1
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
+        batch_number = orig_batch_number
+        seed = orig_seed
+    torch.cuda.empty_cache()
+    torch.cuda.ipc_collect()
+    return [orig_seed, text_cfg_scale, image_cfg_scale, images_array, gen_info]
+    
 
 class CFGDenoiser(nn.Module):
     def __init__(self, model):
@@ -65,6 +293,26 @@ class CFGDenoiser(nn.Module):
         }
         out_cond, out_img_cond, out_uncond = self.inner_model(cfg_z, cfg_sigma, cond=cfg_cond).chunk(3)
         return out_uncond + text_cfg_scale * (out_cond - out_img_cond) + image_cfg_scale * (out_img_cond - out_uncond)
+
+class KDiffusionSampler:
+    def __init__(self, funcname, sd_model):
+        self.func = getattr(K.sampling, self.funcname)
+        self.extra_params = sampler_extra_params.get(funcname, [])
+
+
+
+
+def create_sampler_and_steps_selection(choices, tabname):
+    if opts.samplers_in_dropdown:
+        with FormRow(elem_id=f"sampler_selection_{tabname}"):
+            sampler_index = gr.Dropdown(label='Sampling method', elem_id=f"{tabname}_sampling", choices=[x.name for x in choices], value=choices[0].name, type="index")
+            steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{tabname}_steps", label="Sampling steps", value=20)
+    else:
+        with FormGroup(elem_id=f"sampler_selection_{tabname}"):
+            steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{tabname}_steps", label="Sampling steps", value=20)
+            sampler_index = gr.Radio(label='Sampling method', elem_id=f"{tabname}_sampling", choices=[x.name for x in choices], value=choices[0].name, type="index")
+
+    return steps, sampler_index
 
 def save_files(js_data, images, do_make_zip, index):
     import csv
@@ -292,154 +540,7 @@ def add_style(name: str, prompt: str, negative_prompt: str):
     return [gr.Dropdown.update(visible=True, choices=list(shared.prompt_styles.styles)) for _ in range(2)]
 
 def create_tab(tabname):
-                      
-
-    def generate(
-        input_image: Image.Image,
-        instruction: str,
-        steps: int,
-        randomize_seed: bool,
-        seed: int,
-        randomize_cfg: bool,
-        text_cfg_scale: float,
-        image_cfg_scale: float,
-        negative_prompt: str,
-        batch_number: int,
-        scale: int,
-        batch_in_check,
-        batch_in_dir
-        ):
-
-        
-        model = shared.sd_model
-        model.eval().cuda()
-        model_wrap = K.external.CompVisDenoiser(model)
-        model_wrap_cfg = CFGDenoiser(model_wrap)
-        null_token = model.get_learned_conditioning([""])
-
-
-        input_images = []
-        if (input_image is None and batch_in_check is False) or (input_image is None and (os.path.exists(batch_in_dir) == False or(batch_in_check and batch_in_dir == "")) ):
-            return [seed, text_cfg_scale, image_cfg_scale, None]
-
-        if batch_in_check and os.path.exists(batch_in_dir):
-            for filename in sorted(os.listdir(batch_in_dir)):
-                with open(os.path.join(batch_in_dir, filename), 'rb') as f: # open in readonly mode
-                    try:
-                        im=Image.open(f)
-                        print(f"Adding image: " + filename)
-                        input_images.append(filename)
-                    except IOError:
-                        print(f"Ignoring non-image file: " + f)
-            
-        else:
-            input_images.append(input_image)
-            
-            
-        
-       
-        if instruction == "" and negative_prompt == "":
-            return [input_image, seed]
-
-        images_array = []
-        
-        text_cfg_scale = round(random.uniform(6.0, 9.0), ndigits=2) if randomize_cfg else text_cfg_scale
-        image_cfg_scale = round(random.uniform(1.2, 1.8), ndigits=2) if randomize_cfg else image_cfg_scale
-        seed = random.randint(0, 100000) if randomize_seed else seed
-        orig_seed = seed
-        orig_batch_number = batch_number
-
-        gen_info = {
-            "Prompt": instruction,
-            "Negative Prompt": negative_prompt,
-            "Steps": steps,
-            "Sampler": "Euler A",
-            "Image CFG scale": image_cfg_scale,
-            "Text CFG scale": text_cfg_scale,
-            "Seed": seed,
-            "Model hash": (None if not opts.add_model_hash_to_info or not shared.sd_model.sd_model_hash else shared.sd_model.sd_model_hash),
-            "Model": (None if not opts.add_model_name_to_info or not shared.sd_model.sd_checkpoint_info.model_name else shared.sd_model.sd_checkpoint_info.model_name.replace(',', '').replace(':', '')),
-            "Model Type": "instruct-pix2pix"                     
-        }
-
-        gen_info = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in gen_info.items() if v is not None])
-        print(f"Processing {len(input_images)} image(s)")
-
-
-        while len(input_images) > 0:
-
-            if batch_in_check:
-                filename = input_images.pop(0)
-                input_image = Image.open(os.path.join(batch_in_dir, filename))
-            else:
-                input_image = input_images.pop(0)
-
-            while batch_number > 0:
-                
-
-                
-                width, height = input_image.size
-                factor = scale / max(width, height)
-                factor = math.ceil(min(width, height) * factor / 64) * 64 / min(width, height)
-                width = int((width * factor) // 64) * 64
-                height = int((height * factor) // 64) * 64
-                in_image = ImageOps.fit(input_image, (width, height), method=Image.Resampling.LANCZOS)
-       
-                with torch.no_grad(), autocast("cuda"), model.ema_scope():
-                   
-                    cond = {}
-                    cond["c_crossattn"] = [model.get_learned_conditioning([instruction])]
-                    in_image = 2 * torch.tensor(np.array(in_image)).float() / 255 - 1
-                    in_image = rearrange(in_image, "h w c -> 1 c h w").to(model.device)
-                    cond["c_concat"] = [model.encode_first_stage(in_image).mode()]
-
-                    uncond = {}
-                    uncond["c_crossattn"] = [model.get_learned_conditioning([negative_prompt])]
-                    uncond["c_concat"] = [torch.zeros_like(cond["c_concat"][0])]
-
-                    sigmas = model_wrap.get_sigmas(steps)
-
-                    extra_args = {
-                        "cond": cond,
-                        "uncond": uncond,
-                        "text_cfg_scale": text_cfg_scale,
-                        "image_cfg_scale": image_cfg_scale,
-                    }
-                    
-            
-                    torch.manual_seed(seed)
-                    z = torch.randn_like(cond["c_concat"][0]) * sigmas[0]
-                    z = K.sampling.sample_euler_ancestral(model_wrap_cfg, z, sigmas, extra_args=extra_args)
-                    x = model.decode_first_stage(z)
-                    x = torch.clamp((x + 1.0) / 2.0, min=0.0, max=1.0)
-                    x = 255.0 * rearrange(x, "1 c h w -> h w c")
-                    edited_image = Image.fromarray(x.type(torch.uint8).cpu().numpy())
-
-                    generation_params = {
-                        "Prompt": instruction,
-                        "Negative Prompt": negative_prompt,
-                        "Steps": steps,
-                        "Sampler": "Euler A",
-                        "Image CFG scale": image_cfg_scale,
-                        "Text CFG scale": image_cfg_scale,
-                        "Seed": seed,
-                        "Model hash": (None if not opts.add_model_hash_to_info or not shared.sd_model.sd_model_hash else shared.sd_model.sd_model_hash),
-                        "Model": (None if not opts.add_model_name_to_info or not shared.sd_model.sd_checkpoint_info.model_name else shared.sd_model.sd_checkpoint_info.model_name.replace(',', '').replace(':', '')),
-                        "Model Type": "instruct-pix2pix"                     
-                    }
-                    generation_params_text = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in generation_params.items() if v is not None])
-                    images.save_image(Image.fromarray(x.type(torch.uint8).cpu().numpy()), outdir, "ip2p", seed, instruction, "png", info=generation_params_text)
-                    images_array.append(edited_image)
-                    batch_number -= 1
-                    seed += 1
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                        torch.cuda.ipc_collect()
-            batch_number = orig_batch_number
-            seed = orig_seed
-        torch.cuda.empty_cache()
-        torch.cuda.ipc_collect()
-        return [orig_seed, text_cfg_scale, image_cfg_scale, images_array, gen_info]
+    set_samplers()
 
     with gr.Column(visible=True, elem_id="ip2p_tab") as main_panel:
         ip2p_prompt, ip2p_prompt_styles, ip2p_negative_prompt, submit, ip2p_interrogate, ip2p_deepbooru, ip2p_prompt_style_apply, ip2p_save_style, ip2p_paste, extra_networks_button, token_counter, token_button, negative_token_counter, negative_token_button = create_toprow(is_img2img=True)
@@ -460,7 +561,8 @@ def create_tab(tabname):
                                     batch_out_dir = gr.Textbox(label="Directory for batch output images", visible=False) 
                                 with gr.Row():
                                     batch_number = gr.Number(value=1, label="Output Batches", precision=0, interactive=True)
-                                    steps = gr.Number(value=10, precision=0, label="Steps", interactive=True)
+                                    #steps = gr.Number(value=10, precision=0, label="Steps", interactive=True)
+                                    steps, sampler = create_sampler_and_steps_selection(samplers_for_img2img, "input_ip2p")
                                 with gr.Row():
                                     seed = gr.Number(value=1371, precision=0, label="Seed", interactive=True, show_progress=False)
                                     randomize_seed = gr.Radio(
@@ -513,6 +615,7 @@ def create_tab(tabname):
                     scale,
                     batch_in_check,
                     batch_in_dir,
+                    sampler
                 ]
 
                 gen_outputs=[
