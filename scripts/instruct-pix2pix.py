@@ -164,7 +164,10 @@ def generate(
     vae = model.first_stage_model
     # InstructPix2Pix VAE model doesn't work correctly on MPS, so cast it to CPU
     if shared.device.type == 'mps':
+        assert not shared.cmd_opts.lowvram and not shared.cmd_opts.medvram, "--lowvram and --medvram are currently unsupported for MPS with the instruct-pix2pix extension"
         model.first_stage_model = deepcopy(model.first_stage_model).cpu()
+    
+    animated_gifs = []
 
     try:
         model_wrap = K.external.CompVisDenoiser(model)
@@ -173,25 +176,43 @@ def generate(
         null_token = model.get_learned_conditioning([""])
         input_images = []
     
-        if (input_image is None and batch_in_check is False) or (input_image is None and (os.path.exists(batch_in_dir) == False or(batch_in_check and batch_in_dir == "")) ):
+        if (input_image is None and batch_in_check is False) or ( (input_image is None and (os.path.exists(batch_in_dir) == False) or (batch_in_check and batch_in_dir == ""))):
             return [seed, text_cfg_scale, image_cfg_scale, None]
     
-        if batch_in_check and os.path.exists(batch_in_dir):
+        if batch_in_check:
             for filename in sorted(os.listdir(batch_in_dir)):
                 with open(os.path.join(batch_in_dir, filename), 'rb') as f: # open in readonly mode
                     try:
                         im=Image.open(f)
-                        print(f"Adding image: " + filename)
-                        input_images.append(filename)
+                        if(im.format.lower() == "gif"):
+                            print(f"Gif found, checking for animation")
+                            frame = 0
+                            while True:
+                                frame += 1
+                                try:
+                                    im.seek(im.tell() + 1)
+                                    #output_path = os.path.join(batch_in_dir, filename) + "_frame" + frame
+                                    im2 = im.copy()
+                                    im2 = im2.convert("RGB")
+                                    input_images.append(im2)
+                                    print(f"Added frame {frame} of {filename}")
+                                except EOFError:
+                                    break
+                            if(frame==1):
+                                print(f"Adding single frame GIF: " + filename)
+                                input_images.append(im.convert("RGB"))
+                            else:
+                                animated_gifs.append(filename)
+                        else:
+                            print(f"Adding image: " + filename)
+                            input_images.append(im.convert("RGB"))
                     except IOError:
                         print(f"Ignoring non-image file: " + f)
-            
+
         else:
             input_images.append(input_image)
             
-            
         
-       
         if instruction == "" and negative_prompt == "":
             return [input_image, seed]
     
@@ -218,17 +239,13 @@ def generate(
     
         gen_info = ", ".join([k if k == v else f'{k}: {quote(v)}' for k, v in gen_info.items() if v is not None])
         print(f"Processing {len(input_images)} image(s)")
+        
         while len(input_images) > 0:
     
-            if batch_in_check:
-                filename = input_images.pop(0)
-                input_image = Image.open(os.path.join(batch_in_dir, filename)).convert('RGBA')
-            else:
-                input_image = input_images.pop(0)
+
+            input_image = input_images.pop(0)
     
             while batch_number > 0:
-                
-    
                 
                 width, height = input_image.size
                 factor = scale / max(width, height)
@@ -242,8 +259,8 @@ def generate(
                     cond = {}
                     cond["c_crossattn"] = [model.get_learned_conditioning([instruction])]
                     in_image = 2 * torch.tensor(np.array(in_image)).float() / 255 - 1
-                    in_image = rearrange(in_image, "h w c -> 1 c h w").to(model.first_stage_model.device)
-                    cond["c_concat"] = [model.encode_first_stage(in_image).mode().to(model.device)]
+                    in_image = rearrange(in_image, "h w c -> 1 c h w").to(devices.cpu if shared.device.type == 'mps' else shared.device)
+                    cond["c_concat"] = [model.encode_first_stage(in_image).mode().to(shared.device)]
     
                     uncond = {}
                     uncond["c_crossattn"] = [model.get_learned_conditioning([negative_prompt])]
@@ -261,10 +278,10 @@ def generate(
             
                     torch.manual_seed(seed)
     
-                    z = torch.randn_like(cond["c_concat"][0], device=devices.cpu if model.device.type == 'mps' else None).to(model.device) * sigmas[0]
+                    z = torch.randn_like(cond["c_concat"][0], device=devices.cpu if shared.device.type == 'mps' else None).to(shared.device) * sigmas[0]
                     sampler_function = getattr(K.sampling, samplers_k_diffusion[sampler][1])
                     z = sampler_function(model_wrap_cfg, z, sigmas, extra_args)
-                    x = model.decode_first_stage(z.to(model.first_stage_model.device))
+                    x = model.decode_first_stage(z.to(devices.cpu if shared.device.type == 'mps' else shared.device))
                     x = torch.clamp((x + 1.0) / 2.0, min=0.0, max=1.0)
                     x = 255.0 * rearrange(x, "1 c h w -> h w c")
                     edited_image = Image.fromarray(x.type(torch.uint8).cpu().numpy())
