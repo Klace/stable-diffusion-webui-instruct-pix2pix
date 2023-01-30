@@ -222,7 +222,7 @@ def generate(
     
             if batch_in_check:
                 filename = input_images.pop(0)
-                input_image = Image.open(os.path.join(batch_in_dir, filename)).convert('RGBA')
+                input_image = Image.open(os.path.join(batch_in_dir, filename)).convert('RGB')
             else:
                 input_image = input_images.pop(0)
     
