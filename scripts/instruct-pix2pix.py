@@ -160,12 +160,6 @@ def generate(
         
     model = shared.sd_model
     model.eval().to(shared.device)
-
-    vae = model.first_stage_model
-    # InstructPix2Pix VAE model doesn't work correctly on MPS, so cast it to CPU
-    if shared.device.type == 'mps':
-        assert not shared.cmd_opts.lowvram and not shared.cmd_opts.medvram, "--lowvram and --medvram are currently unsupported for MPS with the instruct-pix2pix extension"
-        model.first_stage_model = deepcopy(model.first_stage_model).cpu()
     
     animated_gifs = []
 
@@ -259,8 +253,8 @@ def generate(
                     cond = {}
                     cond["c_crossattn"] = [model.get_learned_conditioning([instruction])]
                     in_image = 2 * torch.tensor(np.array(in_image)).float() / 255 - 1
-                    in_image = rearrange(in_image, "h w c -> 1 c h w").to(devices.cpu if shared.device.type == 'mps' else shared.device)
-                    cond["c_concat"] = [model.encode_first_stage(in_image).mode().to(shared.device)]
+                    in_image = rearrange(in_image, "h w c -> 1 c h w").to(shared.device)
+                    cond["c_concat"] = [model.encode_first_stage(in_image).mode()]
     
                     uncond = {}
                     uncond["c_crossattn"] = [model.get_learned_conditioning([negative_prompt])]
@@ -281,10 +275,10 @@ def generate(
                     z = torch.randn_like(cond["c_concat"][0], device=devices.cpu if shared.device.type == 'mps' else None).to(shared.device) * sigmas[0]
                     sampler_function = getattr(K.sampling, samplers_k_diffusion[sampler][1])
                     z = sampler_function(model_wrap_cfg, z, sigmas, extra_args)
-                    x = model.decode_first_stage(z.to(devices.cpu if shared.device.type == 'mps' else shared.device))
+                    x = model.decode_first_stage(z).cpu()
                     x = torch.clamp((x + 1.0) / 2.0, min=0.0, max=1.0)
                     x = 255.0 * rearrange(x, "1 c h w -> h w c")
-                    edited_image = Image.fromarray(x.type(torch.uint8).cpu().numpy())
+                    edited_image = Image.fromarray(x.type(torch.uint8).numpy())
     
                     generation_params = {
                         "Prompt": instruction,
@@ -311,7 +305,6 @@ def generate(
     except Exception as e:
         raise e
     finally:
-        model.first_stage_model = vae
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.ipc_collect()
