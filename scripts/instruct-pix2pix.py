@@ -196,7 +196,7 @@ def generate(
             "Prompt": instruction,
             "Negative Prompt": negative_prompt,
             "Steps": steps,
-            "Sampler": sampler,
+            "Sampler": samplers_k_diffusion[sampler][0],
             "Image CFG scale": image_cfg_scale,
             "Text CFG scale": text_cfg_scale,
             "Seed": seed,
