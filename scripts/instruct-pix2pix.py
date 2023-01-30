@@ -115,6 +115,17 @@ def set_samplers():
             samplers_map[alias.lower()] = sampler.name
 
 
+def update_generation_info(generation_info, html_info, img_index):
+    try:
+        generation_info = json.loads(generation_info)
+        if img_index < 0 or img_index >= len(generation_info["infotexts"]):
+            return html_info, gr.update()
+        return plaintext_to_html(generation_info["infotexts"][img_index]), gr.update()
+    except Exception:
+        pass
+    # if the json parse or anything else fails, just return the old html_info
+    return html_info, gr.update()
+
 set_samplers()
 
 sampler_extra_params = {
@@ -430,7 +441,7 @@ Requested path was: {f}
                     save = gr.Button('Save', elem_id=f'save_{tabname}')
                     save_zip = gr.Button('Zip', elem_id=f'save_zip_{tabname}')
 
-                buttons = parameters_copypaste.create_buttons(["img2img", "inpaint", "extras"])
+                buttons = parameters_copypaste.create_buttons(["img2img", "inpaint", "extras", "ip2p"])
 
             open_folder_button.click(
                 fn=lambda: open_folder(shared.opts.outdir_samples or outdir),
@@ -447,14 +458,14 @@ Requested path was: {f}
                     html_log = gr.HTML(elem_id=f'html_log_{tabname}')
 
                     generation_info = gr.Textbox(visible=False, elem_id=f'generation_info_{tabname}')
-                    if tabname == 'txt2img' or tabname == 'img2img':
-                        generation_info_button = gr.Button(visible=False, elem_id=f"{tabname}_generation_info_button")
-                        generation_info_button.click(
-                            fn=update_generation_info,
-                            _js="function(x, y, z){ return [x, y, selected_gallery_index()] }",
-                            inputs=[generation_info, html_info, html_info],
-                            outputs=[html_info, html_info],
-                        )
+       
+                    generation_info_button = gr.Button(visible=False, elem_id=f"{tabname}_generation_info_button")
+                    generation_info_button.click(
+                        fn=update_generation_info,
+                        _js="function(x, y, z){ return [x, y, selected_gallery_index()] }",
+                        inputs=[generation_info, html_info, html_info],
+                        outputs=[html_info, html_info],
+                    )
 
                     save.click(
                         fn=wrap_gradio_call(save_files),
@@ -597,7 +608,7 @@ def create_tab(tabname):
                                      scale = gr.Slider(minimum=64, maximum=2048, step=8, label="Output Image Width", value=512, elem_id="ip2p_scale") 
             with gr.Tabs(elemn_id="output_ip2p"):
                 with gr.TabItem(elem_id="output_ip2p", label="Output"):
-                    ip2p_gallery, html_info_x, html_info, html_log = create_output_panel("ip2p", outdir)
+                    ip2p_gallery, generation_info, html_info, html_log = create_output_panel("ip2p", outdir)
                     info_text = gr.Textbox(label="Info")
  
 
