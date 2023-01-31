@@ -12,12 +12,12 @@ Download the instruct-pix2pix-00-22000 model manually from here: https://hugging
 After loading the model you can use the extension.
 
 ![image](https://user-images.githubusercontent.com/26013475/215627091-f8ee97f4-0e95-4845-8086-e77c413e0379.png)
+ 
+Model does not work with img2img or txt2img. Merging with other 1.5 models is possible but results are mixed at best.
 
-Model does not work with img2img or txt2img. Merging is possible but requires modification to extras.py (out of scope for now)
+Embeddings for 1.5 work, as does emphasis. Advanced prompting features from webui are not implemented.
 
-Embeddings for 1.5 work, as does emphasis.
-
-Todo: Sampler selection
+Todo: Integrate with img2img instead of an extension :)
 
 Feel free to use my modified Image Browser extension for native browsing support (and enhanced sort and filter features compared to normal repo):
 
