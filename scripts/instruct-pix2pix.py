@@ -275,7 +275,7 @@ def generate(
                     z = torch.randn_like(cond["c_concat"][0], device=devices.cpu if shared.device.type == 'mps' else None).to(shared.device) * sigmas[0]
                     sampler_function = getattr(K.sampling, samplers_k_diffusion[sampler][1])
                     z = sampler_function(model_wrap_cfg, z, sigmas, extra_args)
-                    x = model.decode_first_stage(z).cpu()
+                    x = model.decode_first_stage(z).float().cpu()
                     x = torch.clamp((x + 1.0) / 2.0, min=0.0, max=1.0)
                     x = 255.0 * rearrange(x, "1 c h w -> h w c")
                     edited_image = Image.fromarray(x.type(torch.uint8).numpy())
