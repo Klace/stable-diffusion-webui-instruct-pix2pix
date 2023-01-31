@@ -162,6 +162,12 @@ def generate(
     model.eval().to(shared.device)
     
     animated_gifs = []
+    print(f"Input image is {input_image}")
+    if (instruction == "" or instruction is None) and (negative_prompt == "" or negative_prompt is None):
+        return [seed, text_cfg_scale, image_cfg_scale, None, "No prompt specified"]
+
+    if (input_image is None and batch_in_check is False) or (input_image is None and (os.path.exists(batch_in_dir) == False) or (batch_in_check and batch_in_dir == "")):
+        return [seed, text_cfg_scale, image_cfg_scale, None, "No image or batch input provided"]
 
     try:
         model_wrap = K.external.CompVisDenoiser(model)
@@ -170,8 +176,7 @@ def generate(
         null_token = model.get_learned_conditioning([""])
         input_images = []
     
-        if (input_image is None and batch_in_check is False) or ( (input_image is None and (os.path.exists(batch_in_dir) == False) or (batch_in_check and batch_in_dir == ""))):
-            return [seed, text_cfg_scale, image_cfg_scale, None]
+
     
         if batch_in_check:
             for filename in sorted(os.listdir(batch_in_dir)):
@@ -207,8 +212,7 @@ def generate(
             input_images.append(input_image)
             
         
-        if instruction == "" and negative_prompt == "":
-            return [input_image, seed]
+
     
         images_array = []
         
