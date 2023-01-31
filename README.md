@@ -13,6 +13,8 @@ After loading the model you can use the extension.
 
 ![image](https://user-images.githubusercontent.com/26013475/215627091-f8ee97f4-0e95-4845-8086-e77c413e0379.png)
  
+Batch Input processing will unpack any animated .gif found in the directory and process all frames by default.
+ 
 Model does not work with img2img or txt2img. Merging with other 1.5 models is possible but results are mixed at best.
 
 Embeddings for 1.5 work, as does emphasis. Advanced prompting features from webui are not implemented.
