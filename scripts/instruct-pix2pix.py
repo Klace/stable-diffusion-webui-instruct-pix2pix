@@ -162,7 +162,7 @@ def generate(
     model.eval().to(shared.device)
     
     animated_gifs = []
-    print(f"Input image is {input_image}")
+
     if (instruction == "" or instruction is None) and (negative_prompt == "" or negative_prompt is None):
         return [seed, text_cfg_scale, image_cfg_scale, None, "No prompt specified"]
 
