@@ -338,10 +338,10 @@ def create_sampler_and_steps_selection(choices, tabname):
     if opts.samplers_in_dropdown:
         with FormRow(elem_id=f"sampler_selection_{tabname}"):
             sampler_index = gr.Dropdown(label='Sampling method', elem_id=f"{tabname}_sampling", choices=[x.name for x in choices], value=choices[int(opts.def_sampler)].name, type="index")
-            steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{tabname}_steps", label="Sampling steps", value=opts.def_steps)
+            steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{tabname}_steps", label="Sampling steps", value=int(opts.def_steps))
     else:
         with FormGroup(elem_id=f"sampler_selection_{tabname}"):
-            steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{tabname}_steps", label="Sampling steps", value=opts.def_steps)
+            steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{tabname}_steps", label="Sampling steps", value=int(opts.def_steps))
             sampler_index = gr.Radio(label='Sampling method', elem_id=f"{tabname}_sampling", choices=[x.name for x in choices], value=choices[int(opts.def_sampler)].name, type="index")
 
     return steps, sampler_index
@@ -608,8 +608,8 @@ def create_tab(tabname):
                                         interactive=True,
                                     )                                        
                                 with gr.Row():
-                                    text_cfg_scale = gr.Slider(minimum=0.5, maximum=30, value=opts.def_txt_cfg or 7.5, precision=2, label=f"Text CFG", interactive=True, max_width=10, step=0.05, show_progress=False)
-                                    image_cfg_scale = gr.Slider(minimum=0.5, maximum=30, value=opts.def_img_cfg or 1.5, label=f"Image CFG", interactive=True, max_width=10, step=0.05, show_progress=False)
+                                    text_cfg_scale = gr.Slider(minimum=0.5, maximum=30, value=float(opts.def_txt_cfg) or 7.5, precision=2, label=f"Text CFG", interactive=True, max_width=10, step=0.05, show_progress=False)
+                                    image_cfg_scale = gr.Slider(minimum=0.5, maximum=30, value=float(opts.def_img_cfg) or 1.5, label=f"Image CFG", interactive=True, max_width=10, step=0.05, show_progress=False)
                                     randomize_cfg = gr.Radio(  
                                         ["Fix CFG", "Randomize CFG"],
                                         value="Fix CFG",
