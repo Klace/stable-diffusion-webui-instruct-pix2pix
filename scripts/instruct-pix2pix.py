@@ -337,12 +337,12 @@ class KDiffusionSampler:
 def create_sampler_and_steps_selection(choices, tabname):
     if opts.samplers_in_dropdown:
         with FormRow(elem_id=f"sampler_selection_{tabname}"):
-            sampler_index = gr.Dropdown(label='Sampling method', elem_id=f"{tabname}_sampling", choices=[x.name for x in choices], value=choices[0].name, type="index")
-            steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{tabname}_steps", label="Sampling steps", value=20)
+            sampler_index = gr.Dropdown(label='Sampling method', elem_id=f"{tabname}_sampling", choices=[x.name for x in choices], value=choices[int(opts.def_sampler)].name, type="index")
+            steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{tabname}_steps", label="Sampling steps", value=opts.def_steps)
     else:
         with FormGroup(elem_id=f"sampler_selection_{tabname}"):
-            steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{tabname}_steps", label="Sampling steps", value=20)
-            sampler_index = gr.Radio(label='Sampling method', elem_id=f"{tabname}_sampling", choices=[x.name for x in choices], value=choices[0].name, type="index")
+            steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{tabname}_steps", label="Sampling steps", value=opts.def_steps)
+            sampler_index = gr.Radio(label='Sampling method', elem_id=f"{tabname}_sampling", choices=[x.name for x in choices], value=choices[int(opts.def_sampler)].name, type="index")
 
     return steps, sampler_index
 
@@ -573,6 +573,9 @@ def add_style(name: str, prompt: str, negative_prompt: str):
 
 def create_tab(tabname):
     set_samplers()
+    sd_hijack_utils.CondFunc('modules.models.diffusion.ddpm_edit.LatentDiffusion.apply_model', sd_hijack_unet.apply_model, sd_hijack_unet.unet_needs_upcast)
+    sd_hijack_utils.CondFunc('modules.models.diffusion.ddpm_edit.LatentDiffusion.decode_first_stage', sd_hijack_unet.first_stage_sub, sd_hijack_unet.unet_needs_upcast)
+    sd_hijack_utils.CondFunc('modules.models.diffusion.ddpm_edit.LatentDiffusion.encode_first_stage', sd_hijack_unet.first_stage_sub, sd_hijack_unet.unet_needs_upcast)
 
     with gr.Column(visible=True, elem_id="ip2p_tab") as main_panel:
         ip2p_prompt, ip2p_prompt_styles, ip2p_negative_prompt, submit, ip2p_interrogate, ip2p_deepbooru, ip2p_prompt_style_apply, ip2p_save_style, ip2p_paste, extra_networks_button, token_counter, token_button, negative_token_counter, negative_token_button = create_toprow(is_img2img=True)
@@ -589,10 +592,10 @@ def create_tab(tabname):
                                 init_img = gr.Image(label="Disabled for batch input images", elem_id="ip2p_image", show_label=True, source="upload", type="pil")
                                 with gr.Row():
                                     batch_in_check = gr.Checkbox(label="Use batch input directory as image source")
-                                    batch_in_dir = gr.Textbox(label="Directory for batch input images")
+                                    batch_in_dir = gr.Textbox(label="Directory for batch input images", value=opts.def_batch_dir)
                                     batch_out_dir = gr.Textbox(label="Directory for batch output images", visible=False) 
                                 with gr.Row():
-                                    batch_number = gr.Number(value=1, label="Output Batches", precision=0, interactive=True)
+                                    batch_number = gr.Number(value=int(opts.def_out_batches), label="Output Batches", precision=0, interactive=True)
                                     #steps = gr.Number(value=10, precision=0, label="Steps", interactive=True)
                                     steps, sampler = create_sampler_and_steps_selection(samplers_for_img2img, "input_ip2p")
                                 with gr.Row():
@@ -605,8 +608,8 @@ def create_tab(tabname):
                                         interactive=True,
                                     )                                        
                                 with gr.Row():
-                                    text_cfg_scale = gr.Slider(minimum=0.5, maximum=30, value=7.5, precision=2, label=f"Text CFG", interactive=True, max_width=10, step=0.05, show_progress=False)
-                                    image_cfg_scale = gr.Slider(minimum=0.5, maximum=30, value=1.5, label=f"Image CFG", interactive=True, max_width=10, step=0.05, show_progress=False)
+                                    text_cfg_scale = gr.Slider(minimum=0.5, maximum=30, value=opts.def_txt_cfg or 7.5, precision=2, label=f"Text CFG", interactive=True, max_width=10, step=0.05, show_progress=False)
+                                    image_cfg_scale = gr.Slider(minimum=0.5, maximum=30, value=opts.def_img_cfg or 1.5, label=f"Image CFG", interactive=True, max_width=10, step=0.05, show_progress=False)
                                     randomize_cfg = gr.Radio(  
                                         ["Fix CFG", "Randomize CFG"],
                                         value="Fix CFG",
@@ -616,12 +619,11 @@ def create_tab(tabname):
                                     )
                                 with gr.Row(max_width=50):
                                      scale = gr.Slider(minimum=64, maximum=2048, step=8, label="Output Image Width", value=512, elem_id="ip2p_scale") 
-            with gr.Tabs(elemn_id="output_ip2p"):
+            with gr.Tabs(elemn_id="ip2p_gallery_container"):
                 with gr.TabItem(elem_id="output_ip2p", label="Output"):
-                    ip2p_gallery, generation_info, html_info, html_log = create_output_panel("ip2p", outdir)
-                    info_text = gr.Textbox(label="Info")
- 
-
+                    ip2p_gallery, info_text, html_info, html_log = create_output_panel("ip2p", outdir)
+                    #info_text = gr.Textbox(label="Info")
+                    download_files = gr.File(None, file_count="multiple", interactive=False, show_label=False, visible=False, elem_id=f'download_files_ip2p')
                 interrogate_args = dict(
                     _js="get_img2img_tab_index",
                     inputs=[
@@ -745,12 +747,15 @@ def on_ui_tabs():
 
 def on_ui_settings():
     section = ('ip2p', "Instruct-pix2pix")
-
+    shared.opts.add_option("def_img_cfg", shared.OptionInfo("1.5", "Default Image CFG", section=('ip2p', "Instruct-pix2pix")))
+    shared.opts.add_option("def_txt_cfg", shared.OptionInfo("7.5", "Default Text CFG", section=('ip2p', "Instruct-pix2pix")))
+    shared.opts.add_option("def_steps", shared.OptionInfo("20", "Default Steps", section=('ip2p', "Instruct-pix2pix")))
+    shared.opts.add_option("def_sampler", shared.OptionInfo("0", "Default Sampler", section=('ip2p', "Instruct-pix2pix")))
+    shared.opts.add_option("def_out_batches", shared.OptionInfo("1", "Default Out Batches", section=('ip2p', "Instruct-pix2pix")))
+    shared.opts.add_option("def_batch_dir", shared.OptionInfo("outputs/ip2p-batch", "Default Input Batch Output Directory", section=('ip2p', "Instruct-pix2pix")))
+    
 
 # --upcast-sampling needs these patches
-sd_hijack_utils.CondFunc('modules.models.diffusion.ddpm_edit.LatentDiffusion.apply_model', sd_hijack_unet.apply_model, sd_hijack_unet.unet_needs_upcast)
-sd_hijack_utils.CondFunc('modules.models.diffusion.ddpm_edit.LatentDiffusion.decode_first_stage', sd_hijack_unet.first_stage_sub, sd_hijack_unet.unet_needs_upcast)
-sd_hijack_utils.CondFunc('modules.models.diffusion.ddpm_edit.LatentDiffusion.encode_first_stage', sd_hijack_unet.first_stage_sub, sd_hijack_unet.unet_needs_upcast)
 
 
 
