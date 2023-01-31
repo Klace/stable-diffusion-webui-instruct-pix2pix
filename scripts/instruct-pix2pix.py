@@ -622,7 +622,7 @@ def create_tab(tabname):
             with gr.Tabs(elemn_id="ip2p_gallery_container"):
                 with gr.TabItem(elem_id="output_ip2p", label="Output"):
                     ip2p_gallery, info_text, html_info, html_log = create_output_panel("ip2p", outdir)
-                    #info_text = gr.Textbox(label="Info")
+                    info_text = gr.Textbox(label="Info")
                     download_files = gr.File(None, file_count="multiple", interactive=False, show_label=False, visible=False, elem_id=f'download_files_ip2p')
                 interrogate_args = dict(
                     _js="get_img2img_tab_index",
