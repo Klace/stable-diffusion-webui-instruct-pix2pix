@@ -761,8 +761,60 @@ def on_ui_settings():
 
 # --upcast-sampling needs these patches
 
+from fastapi import FastAPI, Body
+from base64 import b64decode, b64encode
+from io import BytesIO
 
+def img_to_b64(image: Image.Image):
+    buf = BytesIO()
+    image.save(buf, format="png")
+    return b64encode(buf.getvalue()).decode("utf-8")
 
+def b64_to_img(enc: str):
+    if enc.startswith('data:image'):
+        enc = enc[enc.find(',')+1:]
+    return Image.open(BytesIO(b64decode(enc)))
+
+def ip2p_api(_: gr.Blocks, app: FastAPI):
+    @app.post("/instruct-pix2pix/img2img")
+    async def img2img(
+        prompt: str = Body("", title='prompt'),
+        negative_prompt: str = Body("", title='negative prompt'),
+        init_images: List[str] = Body([], title="Images", description="List of images to work on. Must be Base64 strings"),
+        output_batches: int = Body(1),
+        sampler: str = Body("Euler a", title="Sampler"),
+        steps: int = Body(20, title="Sampling steps"),
+        seed: int = Body(0, title="Seed"),
+        randomize_seed: bool = Body(True, title="Randomize seed"),
+        text_cfg: float = Body(7.5, title="Text CFG"),
+        image_cfg: float = Body(1.5, title="Image CFG"),
+        randomize_cfg: bool = Body(False, title="Randomize CFG"),
+        output_image_width: int = Body(512, title="Ouput Image Width", description="Must be multiple of 8"),
+        ):
+
+        return_images = []
+        info_arr = []
+
+        # get index from samplers_k_diffusion
+        sampler_index = 0
+        for i, tup in enumerate(samplers_k_diffusion):
+            if tup[0] == sampler:
+                sampler_index = i
+                break
+
+        for b64img in init_images:
+            img = b64_to_img(b64img)
+            ret = generate(img, prompt, steps, randomize_seed, seed, randomize_cfg, text_cfg, image_cfg,
+                           negative_prompt, output_batches, output_image_width, False, False, sampler_index)
+            # ret: [orig_seed, text_cfg_scale, image_cfg_scale, images_array, gen_info]
+            img_array = ret[3]
+            info_arr.append(ret[4])
+            return_images.extend([img_to_b64(x) for x in img_array])
+        
+        info = '\n\n'.join(info_arr)
+
+        return {"images": return_images, "info": info, "prompt": prompt}
 
 script_callbacks.on_ui_settings(on_ui_settings)
 script_callbacks.on_ui_tabs(on_ui_tabs)
+script_callbacks.on_app_started(ip2p_api)
