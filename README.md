@@ -1,4 +1,12 @@
 # stable-diffusion-webui-instruct-pix2pix
+
+NOTE: This extension is no longer required. I have integrated the code into Automatic1111 img2img pipeline and the webUI now has Image CFG Scale for instruct-pix2pix models.
+
+If there is anything from this extension you'd like please let me know (i.e. random CFG) and I can make a separate extension to extend webui img2img instead.
+
+Enjoy!
+
+
 Extension for webui to run instruct-pix2pix models
 
 Code based on: https://www.timothybrooks.com/instruct-pix2pix/
