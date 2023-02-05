@@ -1,4 +1,4 @@
-#**DEPRECATED**: This extension is no longer required. I have integrated the code into Automatic1111 img2img pipeline and the webUI now has Image CFG Scale for instruct-pix2pix models.
+**DEPRECATED**: This extension is no longer required. I have integrated the code into Automatic1111 img2img pipeline and the webUI now has Image CFG Scale for instruct-pix2pix models built into the img2img interface. This extension is obsolete. 
 
 If there is anything from this extension missing from img2img that you'd like please let me know (i.e. random CFG) and I can make a separate extension to extend webui img2img instead.
 
