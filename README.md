@@ -1,8 +1,6 @@
-#**DEPRECATED**: stable-diffusion-webui-instruct-pix2pix
+#**DEPRECATED**: This extension is no longer required. I have integrated the code into Automatic1111 img2img pipeline and the webUI now has Image CFG Scale for instruct-pix2pix models.
 
-NOTE: This extension is no longer required. I have integrated the code into Automatic1111 img2img pipeline and the webUI now has Image CFG Scale for instruct-pix2pix models.
-
-If there is anything from this extension you'd like please let me know (i.e. random CFG) and I can make a separate extension to extend webui img2img instead.
+If there is anything from this extension missing from img2img that you'd like please let me know (i.e. random CFG) and I can make a separate extension to extend webui img2img instead.
 
 Enjoy!
 
