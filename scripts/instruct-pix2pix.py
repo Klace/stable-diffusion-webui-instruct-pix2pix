@@ -582,7 +582,7 @@ def create_tab(tabname):
     sd_hijack_utils.CondFunc('modules.models.diffusion.ddpm_edit.LatentDiffusion.encode_first_stage', sd_hijack_unet.first_stage_sub, sd_hijack_unet.unet_needs_upcast)
 
     with gr.Column(visible=True, elem_id="ip2p_tab") as main_panel:
-        ip2p_prompt, ip2p_prompt_styles, ip2p_negative_prompt, submit, ip2p_interrogate, ip2p_deepbooru, ip2p_prompt_style_apply, ip2p_save_style, ip2p_paste, extra_networks_button, token_counter, token_button, negative_token_counter, negative_token_button = create_toprow(is_img2img=True)
+        ip2p_prompt, ip2p_prompt_styles, ip2p_negative_prompt, submit, ip2p_interrogate, ip2p_deepbooru, ip2p_prompt_style_apply, ip2p_save_style, ip2p_paste, extra_networks_button, token_counter, token_button, negative_token_counter, negative_token_button, _ = create_toprow(is_img2img=True)
         with FormRow(variant='compact', elem_id="ip2p_extra_networks", visible=False) as extra_networks:
             from modules import ui_extra_networks
             extra_networks_ui_ip2p = ui_extra_networks.create_ui(extra_networks, extra_networks_button, 'ip2p')
